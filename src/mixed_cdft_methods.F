@@ -72,14 +72,9 @@ MODULE mixed_cdft_methods
    USE machine,                         ONLY: m_walltime
    USE mathlib,                         ONLY: diamat_all
    USE memory_utilities,                ONLY: reallocate
-   USE message_passing,                 ONLY: mp_bcast,&
-                                              mp_irecv,&
-                                              mp_isend,&
-                                              mp_sum,&
-                                              mp_test,&
-                                              mp_testall,&
-                                              mp_wait,&
-                                              mp_waitall
+   USE message_passing,                 ONLY: &
+        mp_bcast, mp_irecv, mp_isend, mp_request_type, mp_sum, mp_test, mp_testall, mp_wait, &
+        mp_waitall
    USE mixed_cdft_types,                ONLY: mixed_cdft_result_type_set,&
                                               mixed_cdft_settings_type,&
                                               mixed_cdft_type,&
@@ -115,12 +110,10 @@ MODULE mixed_cdft_methods
                                               make_basis_sm
    USE qs_mo_types,                     ONLY: allocate_mo_set,&
                                               deallocate_mo_set,&
-                                              mo_set_p_type,&
+                                              mo_set_type,&
                                               set_mo_set
    USE realspace_grid_types,            ONLY: realspace_grid_type,&
                                               rs2pw,&
-                                              rs_grid_release,&
-                                              rs_grid_retain,&
                                               rs_grid_zero,&
                                               rs_pw_transfer
    USE util,                            ONLY: sort
@@ -453,7 +446,7 @@ CONTAINS
       INTEGER :: handle, handle2, i, iforce_eval, ind, INDEX(6), iounit, j, lb_min, &
          my_special_work, natom, nforce_eval, recv_offset, ub_max
       INTEGER, DIMENSION(2, 3)                           :: bo
-      INTEGER, DIMENSION(:), POINTER                     :: lb, req_total, sendbuffer_i, ub
+      INTEGER, DIMENSION(:), POINTER                     :: lb, sendbuffer_i, ub
       REAL(KIND=dp)                                      :: t1, t2
       TYPE(cdft_control_type), POINTER                   :: cdft_control, cdft_control_target
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -462,6 +455,7 @@ CONTAINS
       TYPE(force_env_type), POINTER                      :: force_env_qs
       TYPE(mixed_cdft_type), POINTER                     :: mixed_cdft
       TYPE(mixed_environment_type), POINTER              :: mixed_env
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: req_total
       TYPE(particle_list_type), POINTER                  :: particles_mix
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool, mixed_auxbas_pw_pool
@@ -969,13 +963,11 @@ CONTAINS
             ! Cavity
             IF (cdft_control_source%type == outer_scf_becke_constraint) THEN
                IF (cdft_control_source%becke_control%cavity_confine) THEN
-                  ALLOCATE (cdft_control_target%becke_control%cavity%pw)
-                  CALL pw_pool_create_pw(auxbas_pw_pool_target, cdft_control_target%becke_control%cavity%pw, &
+                  CALL pw_pool_create_pw(auxbas_pw_pool_target, cdft_control_target%becke_control%cavity, &
                                          use_data=REALDATA3D, in_space=REALSPACE)
-                  cdft_control_target%becke_control%cavity%pw%cr3d(:, :, :) = &
-                     cdft_control_source%becke_control%cavity%pw%cr3d
-                  CALL pw_pool_give_back_pw(auxbas_pw_pool_source, cdft_control_source%becke_control%cavity%pw)
-                  DEALLOCATE (cdft_control_source%becke_control%cavity%pw)
+                  cdft_control_target%becke_control%cavity%cr3d(:, :, :) = &
+                     cdft_control_source%becke_control%cavity%cr3d
+                  CALL pw_pool_give_back_pw(auxbas_pw_pool_source, cdft_control_source%becke_control%cavity)
                END IF
             END IF
             ! Gradients
@@ -1001,13 +993,11 @@ CONTAINS
                IF (.NOT. ASSOCIATED(cdft_control_target%charge)) &
                   ALLOCATE (cdft_control_target%charge(cdft_control_target%natoms))
                DO iatom = 1, cdft_control_target%natoms
-                  ALLOCATE (cdft_control_target%charge(iatom)%pw)
                   CALL pw_pool_create_pw(auxbas_pw_pool_target, &
-                                         cdft_control_target%charge(iatom)%pw, &
+                                         cdft_control_target%charge(iatom), &
                                          use_data=REALDATA3D, in_space=REALSPACE)
-                  cdft_control_target%charge(iatom)%pw%cr3d = cdft_control_source%charge(iatom)%pw%cr3d
-                  CALL pw_pool_give_back_pw(auxbas_pw_pool_source, cdft_control_source%charge(iatom)%pw)
-                  DEALLOCATE (cdft_control_source%charge(iatom)%pw)
+                  cdft_control_target%charge(iatom)%cr3d = cdft_control_source%charge(iatom)%cr3d
+                  CALL pw_pool_give_back_pw(auxbas_pw_pool_source, cdft_control_source%charge(iatom))
                END DO
             END IF
             ! Set some flags so the weight is not rebuilt during SCF
@@ -2080,12 +2070,12 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_subsys_type), POINTER                      :: subsys_mix
       TYPE(dbcsr_type), POINTER                          :: mixed_matrix_s
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mo_set
+      TYPE(mo_set_type), ALLOCATABLE, DIMENSION(:)       :: mo_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(section_vals_type), POINTER                   :: force_env_section, mixed_cdft_section
 
-      NULLIFY (mixed_cdft_section, subsys_mix, mo_set, particle_set, qs_kind_set, atomic_kind_set, &
+      NULLIFY (mixed_cdft_section, subsys_mix, particle_set, qs_kind_set, atomic_kind_set, &
                mixed_mo_coeff, mixed_matrix_s, force_env_section)
       logger => cp_get_default_logger()
 
@@ -2107,18 +2097,17 @@ CONTAINS
       DO ispin = 1, nspins
          nao = nrow_mo(ispin)
          nmo = ncol_mo(ispin)
-         NULLIFY (mo_set(ispin)%mo_set)
          ! Only OT with fully occupied orbitals is implicitly supported
-         CALL allocate_mo_set(mo_set(ispin)%mo_set, nao=nao, nmo=nmo, nelectron=INT(maxocc*nmo), &
+         CALL allocate_mo_set(mo_set(ispin), nao=nao, nmo=nmo, nelectron=INT(maxocc*nmo), &
                               n_el_f=REAL(maxocc*nmo, dp), maxocc=maxocc, &
                               flexible_electron_count=0.0_dp)
-         CALL set_mo_set(mo_set(ispin)%mo_set, uniform_occupation=.TRUE., homo=nmo)
-         ALLOCATE (mo_set(ispin)%mo_set%mo_coeff)
-         CALL cp_fm_create(matrix=mo_set(ispin)%mo_set%mo_coeff, &
+         CALL set_mo_set(mo_set(ispin), uniform_occupation=.TRUE., homo=nmo)
+         ALLOCATE (mo_set(ispin)%mo_coeff)
+         CALL cp_fm_create(matrix=mo_set(ispin)%mo_coeff, &
                            matrix_struct=mixed_mo_coeff(1, ispin)%matrix%matrix_struct, &
                            name="GS_MO_COEFF"//TRIM(ADJUSTL(cp_to_string(ispin)))//"MATRIX")
-         ALLOCATE (mo_set(ispin)%mo_set%eigenvalues(nmo))
-         ALLOCATE (mo_set(ispin)%mo_set%occupation_numbers(nmo))
+         ALLOCATE (mo_set(ispin)%eigenvalues(nmo))
+         ALLOCATE (mo_set(ispin)%occupation_numbers(nmo))
       END DO
       ! Read wfn file (note we assume that the basis set is the same)
       IF (force_env%mixed_env%do_mixed_qmmm_cdft) &
@@ -2150,9 +2139,9 @@ CONTAINS
       ! Orthonormalize wfn
       DO ispin = 1, nspins
          IF (mixed_cdft%has_unit_metric) THEN
-            CALL make_basis_simple(mo_set(ispin)%mo_set%mo_coeff, ncol_mo(ispin))
+            CALL make_basis_simple(mo_set(ispin)%mo_coeff, ncol_mo(ispin))
          ELSE
-            CALL make_basis_sm(mo_set(ispin)%mo_set%mo_coeff, ncol_mo(ispin), mixed_matrix_s)
+            CALL make_basis_sm(mo_set(ispin)%mo_coeff, ncol_mo(ispin), mixed_matrix_s)
          END IF
       END DO
       ! Calculate MO overlaps between reference state (R) and CDFT state pairs I/J
@@ -2176,7 +2165,7 @@ CONTAINS
          DO ipermutation = 1, npermutations
             CALL map_permutation_to_states(nforce_eval, ipermutation, istate, jstate)
             ! S*C_r
-            CALL cp_dbcsr_sm_fm_multiply(mixed_matrix_s, mo_set(ispin)%mo_set%mo_coeff, &
+            CALL cp_dbcsr_sm_fm_multiply(mixed_matrix_s, mo_set(ispin)%mo_coeff, &
                                          mo_tmp, nmo, 1.0_dp, 0.0_dp)
             ! C_i^T * (S*C_r)
             CALL cp_fm_set_all(mo_overlap_wfn, alpha=0.0_dp)
@@ -2194,7 +2183,7 @@ CONTAINS
          CALL cp_fm_release(mo_overlap_wfn)
          CALL cp_fm_release(inverse_mat)
          CALL cp_fm_release(mo_tmp)
-         CALL deallocate_mo_set(mo_set(ispin)%mo_set)
+         CALL deallocate_mo_set(mo_set(ispin))
       END DO
       DEALLOCATE (mo_set)
       DO ipermutation = 1, npermutations
@@ -2557,7 +2546,6 @@ CONTAINS
          CALL pw_env_get(pw_env=mixed_cdft%pw_env, auxbas_rs_grid=rs_cavity, &
                          auxbas_pw_pool=auxbas_pw_pool)
          ! be careful in parallel nsmax is chosen with multigrid in mind!
-         CALL rs_grid_retain(rs_cavity)
          CALL rs_grid_zero(rs_cavity)
          ALLOCATE (pab(1, 1))
          nthread = 1
@@ -2612,12 +2600,10 @@ CONTAINS
             DEALLOCATE (cores)
          END DO
          DEALLOCATE (pab)
-         ALLOCATE (cdft_control%becke_control%cavity%pw)
-         CALL pw_pool_create_pw(auxbas_pw_pool, cdft_control%becke_control%cavity%pw, &
+         CALL pw_pool_create_pw(auxbas_pw_pool, cdft_control%becke_control%cavity, &
                                 use_data=REALDATA3D, in_space=REALSPACE)
-         CALL rs_pw_transfer(rs_cavity, cdft_control%becke_control%cavity%pw, rs2pw)
-         CALL rs_grid_release(rs_cavity)
-         CALL hfun_zero(cdft_control%becke_control%cavity%pw%cr3d, &
+         CALL rs_pw_transfer(rs_cavity, cdft_control%becke_control%cavity, rs2pw)
+         CALL hfun_zero(cdft_control%becke_control%cavity%cr3d, &
                         cdft_control%becke_control%eps_cavity, &
                         just_zero=.FALSE., bounds=bounds, work=my_work)
          IF (bounds(2) .LT. bo(2, 3)) THEN
@@ -2645,7 +2631,7 @@ CONTAINS
          END IF
          cdft_control%becke_control%confine_bounds = bounds
          IF (cdft_control%becke_control%print_cavity) THEN
-            CALL hfun_zero(cdft_control%becke_control%cavity%pw%cr3d, &
+            CALL hfun_zero(cdft_control%becke_control%cavity%cr3d, &
                            cdft_control%becke_control%eps_cavity, just_zero=.TRUE.)
             NULLIFY (stride)
             ALLOCATE (stride(3))
@@ -2658,7 +2644,7 @@ CONTAINS
             IF (force_env%para_env%ionode .AND. unit_nr .LT. 1) &
                CALL cp_abort(__LOCATION__, &
                              "Please turn on PROGRAM_RUN_INFO to print cavity")
-            CALL cp_pw_to_cube(cdft_control%becke_control%cavity%pw, &
+            CALL cp_pw_to_cube(cdft_control%becke_control%cavity, &
                                unit_nr, "CAVITY", particles=particles, &
                                stride=stride, mpi_io=mpi_io)
             CALL cp_print_key_finished_output(unit_nr, logger, print_section, '', mpi_io=mpi_io)
@@ -2685,24 +2671,23 @@ CONTAINS
             DO i = 1, SIZE(mixed_cdft%dest_list)
                ALLOCATE (mixed_cdft%sendbuff(i)%cavity(mixed_cdft%dest_list_bo(1, i):mixed_cdft%dest_list_bo(2, i), &
                                                        bo(1, 2):bo(2, 2), bo_conf(1, 3):bo_conf(2, 3)))
-               mixed_cdft%sendbuff(i)%cavity = cdft_control%becke_control%cavity%pw%cr3d(mixed_cdft%dest_list_bo(1, i): &
-                                                                                         mixed_cdft%dest_list_bo(2, i), &
-                                                                                         bo(1, 2):bo(2, 2), &
-                                                                                         bo_conf(1, 3):bo_conf(2, 3))
+               mixed_cdft%sendbuff(i)%cavity = cdft_control%becke_control%cavity%cr3d(mixed_cdft%dest_list_bo(1, i): &
+                                                                                      mixed_cdft%dest_list_bo(2, i), &
+                                                                                      bo(1, 2):bo(2, 2), &
+                                                                                      bo_conf(1, 3):bo_conf(2, 3))
             END DO
          ELSE IF (mixed_cdft%is_pencil) THEN
             ALLOCATE (mixed_cdft%cavity(bo(1, 1) + offset_dlb:bo(2, 1), bo(1, 2):bo(2, 2), bo_conf(1, 3):bo_conf(2, 3)))
-            mixed_cdft%cavity = cdft_control%becke_control%cavity%pw%cr3d(bo(1, 1) + offset_dlb:bo(2, 1), &
-                                                                          bo(1, 2):bo(2, 2), &
-                                                                          bo_conf(1, 3):bo_conf(2, 3))
+            mixed_cdft%cavity = cdft_control%becke_control%cavity%cr3d(bo(1, 1) + offset_dlb:bo(2, 1), &
+                                                                       bo(1, 2):bo(2, 2), &
+                                                                       bo_conf(1, 3):bo_conf(2, 3))
          ELSE
             ALLOCATE (mixed_cdft%cavity(bo(1, 1):bo(2, 1), bo(1, 2) + offset_dlb:bo(2, 2), bo_conf(1, 3):bo_conf(2, 3)))
-            mixed_cdft%cavity = cdft_control%becke_control%cavity%pw%cr3d(bo(1, 1):bo(2, 1), &
-                                                                          bo(1, 2) + offset_dlb:bo(2, 2), &
-                                                                          bo_conf(1, 3):bo_conf(2, 3))
+            mixed_cdft%cavity = cdft_control%becke_control%cavity%cr3d(bo(1, 1):bo(2, 1), &
+                                                                       bo(1, 2) + offset_dlb:bo(2, 2), &
+                                                                       bo_conf(1, 3):bo_conf(2, 3))
          END IF
-         CALL pw_pool_give_back_pw(auxbas_pw_pool, cdft_control%becke_control%cavity%pw)
-         DEALLOCATE (cdft_control%becke_control%cavity%pw)
+         CALL pw_pool_give_back_pw(auxbas_pw_pool, cdft_control%becke_control%cavity)
       END IF
       IF (mixed_cdft%is_special) THEN
          DO i = 1, SIZE(mixed_cdft%dest_list)
@@ -2769,10 +2754,9 @@ CONTAINS
 
       INTEGER :: actually_sent, exhausted_work, handle, i, ind, iounit, ispecial, j, max_targets, &
          more_work, my_pos, my_special_work, my_target, no_overloaded, no_underloaded, nsend, &
-         nsend_limit, nsend_max, offset, offset_proc, offset_special, req(4), send_total, tags(2)
+         nsend_limit, nsend_max, offset, offset_proc, offset_special, send_total, tags(2)
       INTEGER, DIMENSION(:), POINTER :: buffsize, cumulative_work, expected_work, load_imbalance, &
-         nrecv, nsend_proc, req_recv, req_total, sendbuffer, should_warn, tmp, work_index, &
-         work_size
+         nrecv, nsend_proc, sendbuffer, should_warn, tmp, work_index, work_size
       INTEGER, DIMENSION(:, :), POINTER                  :: targets, tmp_bo
       LOGICAL                                            :: consistent
       LOGICAL, DIMENSION(:), POINTER                     :: mask_recv, mask_send, touched
@@ -2781,6 +2765,8 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: cavity
       TYPE(cdft_control_type), POINTER                   :: cdft_control
       TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(mp_request_type), DIMENSION(4)                :: req
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: req_recv, req_total
       TYPE(section_vals_type), POINTER                   :: force_env_section, print_section
 
       TYPE buffers
@@ -3167,21 +3153,21 @@ CONTAINS
                   ALLOCATE (cavity(bo_conf(1, 1) + offset: &
                                    bo_conf(1, 1) + offset + (mixed_cdft%dlb_control%target_list(2, i) - 1), &
                                    bo_conf(1, 2):bo_conf(2, 2), bo_conf(1, 3):bo_conf(2, 3)))
-                  cavity = cdft_control%becke_control%cavity%pw%cr3d(bo_conf(1, 1) + offset: &
-                                                                     bo_conf(1, 1) + offset + &
-                                                                     (mixed_cdft%dlb_control%target_list(2, i) - 1), &
-                                                                     bo_conf(1, 2):bo_conf(2, 2), &
-                                                                     bo_conf(1, 3):bo_conf(2, 3))
+                  cavity = cdft_control%becke_control%cavity%cr3d(bo_conf(1, 1) + offset: &
+                                                                  bo_conf(1, 1) + offset + &
+                                                                  (mixed_cdft%dlb_control%target_list(2, i) - 1), &
+                                                                  bo_conf(1, 2):bo_conf(2, 2), &
+                                                                  bo_conf(1, 3):bo_conf(2, 3))
                ELSE
                   ALLOCATE (cavity(bo_conf(1, 1):bo_conf(2, 1), &
                                    bo_conf(1, 2) + offset: &
                                    bo_conf(1, 2) + offset + (mixed_cdft%dlb_control%target_list(2, i) - 1), &
                                    bo_conf(1, 3):bo_conf(2, 3)))
-                  cavity = cdft_control%becke_control%cavity%pw%cr3d(bo_conf(1, 1):bo_conf(2, 1), &
-                                                                     bo_conf(1, 2) + offset: &
-                                                                     bo_conf(1, 2) + offset + &
-                                                                     (mixed_cdft%dlb_control%target_list(2, i) - 1), &
-                                                                     bo_conf(1, 3):bo_conf(2, 3))
+                  cavity = cdft_control%becke_control%cavity%cr3d(bo_conf(1, 1):bo_conf(2, 1), &
+                                                                  bo_conf(1, 2) + offset: &
+                                                                  bo_conf(1, 2) + offset + &
+                                                                  (mixed_cdft%dlb_control%target_list(2, i) - 1), &
+                                                                  bo_conf(1, 3):bo_conf(2, 3))
                END IF
                CALL mp_isend(msgin=cavity, &
                              dest=mixed_cdft%dlb_control%target_list(1, i), &
@@ -3232,9 +3218,9 @@ CONTAINS
                   ALLOCATE (cavity(mixed_cdft%dlb_control%target_list(offset_special + 2*(j - 1), i): &
                                    mixed_cdft%dlb_control%target_list(offset_special + 2*j - 1, i), &
                                    bo_conf(1, 2):bo_conf(2, 2), bo_conf(1, 3):bo_conf(2, 3)))
-                  cavity = cdft_control%becke_control%cavity%pw%cr3d(LBOUND(cavity, 1):UBOUND(cavity, 1), &
-                                                                     bo_conf(1, 2):bo_conf(2, 2), &
-                                                                     bo_conf(1, 3):bo_conf(2, 3))
+                  cavity = cdft_control%becke_control%cavity%cr3d(LBOUND(cavity, 1):UBOUND(cavity, 1), &
+                                                                  bo_conf(1, 2):bo_conf(2, 2), &
+                                                                  bo_conf(1, 3):bo_conf(2, 3))
                   CALL mp_isend(msgin=cavity, &
                                 dest=mixed_cdft%dlb_control%target_list(1, i), &
                                 request=req(1), comm=force_env%para_env%group)
@@ -3548,8 +3534,8 @@ CONTAINS
       INTEGER :: handle, i, iatom, icomm, iforce_eval, index, iounit, ip, ispecial, iwork, j, &
          jatom, jcomm, k, my_special_work, my_work, natom, nbuffs, nforce_eval, np(3), &
          nsent_total, nskipped, nwork, offset, offset_repl
-      INTEGER, DIMENSION(:), POINTER                     :: req_recv, req_total, work, work_dlb
-      INTEGER, DIMENSION(:, :), POINTER                  :: nsent, req_send
+      INTEGER, DIMENSION(:), POINTER                     :: work, work_dlb
+      INTEGER, DIMENSION(:, :), POINTER                  :: nsent
       LOGICAL                                            :: completed_recv, should_communicate
       LOGICAL, ALLOCATABLE, DIMENSION(:)                 :: skip_me
       LOGICAL, ALLOCATABLE, DIMENSION(:, :)              :: completed
@@ -3572,6 +3558,8 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_subsys_type), POINTER                      :: subsys_mix
       TYPE(force_env_type), POINTER                      :: force_env_qs
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: req_recv, req_total
+      TYPE(mp_request_type), DIMENSION(:, :), POINTER    :: req_send
       TYPE(particle_list_type), POINTER                  :: particles
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool

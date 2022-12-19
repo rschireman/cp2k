@@ -63,6 +63,7 @@ MODULE kpoint_methods
    USE memory_utilities,                ONLY: reallocate
    USE message_passing,                 ONLY: mp_cart_create,&
                                               mp_cart_sub,&
+                                              mp_comm_type,&
                                               mp_max,&
                                               mp_sum
    USE parallel_gemm_api,               ONLY: parallel_gemm
@@ -74,7 +75,6 @@ MODULE kpoint_methods
    USE qs_mo_types,                     ONLY: allocate_mo_set,&
                                               get_mo_set,&
                                               init_mo_set,&
-                                              mo_set_p_type,&
                                               mo_set_type,&
                                               set_mo_set
    USE qs_neighbor_list_types,          ONLY: get_iterator_info,&
@@ -273,9 +273,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'kpoint_env_initialize'
 
-      INTEGER                                            :: comm_cart, comm_inter_kp, comm_kp, &
-                                                            handle, igr, ik, ikk, ngr, niogrp, &
-                                                            nkp, nkp_grp, nkp_loc, npe, unit_nr
+      INTEGER                                            :: handle, igr, ik, ikk, ngr, niogrp, nkp, &
+                                                            nkp_grp, nkp_loc, npe, unit_nr
       INTEGER, DIMENSION(2)                              :: dims, pos
       LOGICAL, DIMENSION(2)                              :: rdim
       TYPE(cp_para_cart_type), POINTER                   :: cart
@@ -283,6 +282,7 @@ CONTAINS
                                                             para_env_inter_kp, para_env_kp
       TYPE(kpoint_env_p_type), DIMENSION(:), POINTER     :: kp_env
       TYPE(kpoint_env_type), POINTER                     :: kp
+      TYPE(mp_comm_type)                                 :: comm_cart, comm_inter_kp, comm_kp
 
       CALL timeset(routineN, handle)
 
@@ -424,7 +424,7 @@ CONTAINS
    SUBROUTINE kpoint_initialize_mos(kpoint, mos, added_mos)
 
       TYPE(kpoint_type), POINTER                         :: kpoint
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), INTENT(INOUT)     :: mos
       INTEGER, INTENT(IN), OPTIONAL                      :: added_mos
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'kpoint_initialize_mos'
@@ -444,7 +444,7 @@ CONTAINS
 
       CPASSERT(ASSOCIATED(kpoint))
 
-      IF (ASSOCIATED(mos)) THEN
+      IF (.TRUE. .OR. ASSOCIATED(mos(1)%mo_coeff)) THEN
 
          IF (PRESENT(added_mos)) THEN
             nadd = added_mos
@@ -466,12 +466,11 @@ CONTAINS
                kp => kpoint%kp_env(ik)%kpoint_env
                ALLOCATE (kp%mos(nc, nspin))
                DO is = 1, nspin
-                  CALL get_mo_set(mos(is)%mo_set, nao=nao, nmo=nmo, nelectron=nelectron, &
+                  CALL get_mo_set(mos(is), nao=nao, nmo=nmo, nelectron=nelectron, &
                                   n_el_f=n_el_f, maxocc=maxocc, flexible_electron_count=flexible_electron_count)
                   nmo = MIN(nao, nmo + nadd)
                   DO ic = 1, nc
-                     NULLIFY (kp%mos(ic, is)%mo_set)
-                     CALL allocate_mo_set(kp%mos(ic, is)%mo_set, nao, nmo, nelectron, n_el_f, maxocc, &
+                     CALL allocate_mo_set(kp%mos(ic, is), nao, nmo, nelectron, n_el_f, maxocc, &
                                           flexible_electron_count)
                   END DO
                END DO
@@ -487,9 +486,9 @@ CONTAINS
 
             ! set possible new number of MOs
             DO is = 1, nspin
-               CALL get_mo_set(mos(is)%mo_set, nmo=nmorig(is))
+               CALL get_mo_set(mos(is), nmo=nmorig(is))
                nmo = MIN(nao, nmorig(is) + nadd)
-               CALL set_mo_set(mos(is)%mo_set, nmo=nmo)
+               CALL set_mo_set(mos(is), nmo=nmo)
             END DO
             ! matrix pools for the kpoint group, information on MOs is transferred using
             ! generic mos structure
@@ -500,11 +499,12 @@ CONTAINS
             kpoint%mpools => mpools
             ! reset old number of MOs
             DO is = 1, nspin
-               CALL set_mo_set(mos(is)%mo_set, nmo=nmorig(is))
+               CALL set_mo_set(mos(is), nmo=nmorig(is))
             END DO
 
             ! allocate density matrices
             CALL mpools_get(mpools, ao_ao_fm_pools=ao_ao_fm_pools)
+            ALLOCATE (fmlocal)
             CALL fm_pool_create_fm(ao_ao_fm_pools(1)%pool, fmlocal)
             CALL cp_fm_get_info(fmlocal, matrix_struct=matrix_struct)
             DO ik = 1, nkp_loc
@@ -545,6 +545,7 @@ CONTAINS
                END DO
             END DO
             CALL fm_pool_give_back_fm(ao_ao_fm_pools(1)%pool, fmlocal)
+            DEALLOCATE (fmlocal)
 
          END IF
 
@@ -566,7 +567,7 @@ CONTAINS
       INTEGER                                            :: handle, ic, ik, ikk, ispin
       TYPE(cp_fm_pool_p_type), DIMENSION(:), POINTER     :: ao_mo_fm_pools
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
-      TYPE(mo_set_p_type), DIMENSION(:, :), POINTER      :: moskp
+      TYPE(mo_set_type), DIMENSION(:, :), POINTER        :: moskp
 
       CALL timeset(routineN, handle)
 
@@ -577,9 +578,9 @@ CONTAINS
          CPASSERT(ASSOCIATED(moskp))
          DO ispin = 1, SIZE(moskp, 2)
             DO ic = 1, SIZE(moskp, 1)
-               CALL get_mo_set(moskp(ic, ispin)%mo_set, mo_coeff=mo_coeff)
+               CALL get_mo_set(moskp(ic, ispin), mo_coeff=mo_coeff)
                IF (.NOT. ASSOCIATED(mo_coeff)) THEN
-                  CALL init_mo_set(moskp(ic, ispin)%mo_set, &
+                  CALL init_mo_set(moskp(ic, ispin), &
                                    fm_pool=ao_mo_fm_pools(ispin)%pool, name="kpoints")
                END IF
             END DO
@@ -846,11 +847,11 @@ CONTAINS
       CALL get_kpoint_info(kpoint, nkp=nkp)
       kp => kpoint%kp_env(1)%kpoint_env
       nspin = SIZE(kp%mos, 2)
-      mo_set => kp%mos(1, 1)%mo_set
+      mo_set => kp%mos(1, 1)
       CALL get_mo_set(mo_set, nmo=nmo, nelectron=nelectron)
       ne_a = nelectron
       IF (nspin == 2) THEN
-         CALL get_mo_set(kp%mos(1, 2)%mo_set, nmo=nb, nelectron=ne_b)
+         CALL get_mo_set(kp%mos(1, 2), nmo=nb, nelectron=ne_b)
          CPASSERT(nmo == nb)
       END IF
       ALLOCATE (weig(nmo, nkp, nspin), wocc(nmo, nkp, nspin))
@@ -862,7 +863,7 @@ CONTAINS
          ik = kp_range(1) + ikpgr - 1
          kp => kpoint%kp_env(ikpgr)%kpoint_env
          DO ispin = 1, nspin
-            mo_set => kp%mos(1, ispin)%mo_set
+            mo_set => kp%mos(1, ispin)
             CALL get_mo_set(mo_set, eigenvalues=eigenvalues)
             weig(1:nmo, ik, ispin) = eigenvalues(1:nmo)
          END DO
@@ -913,7 +914,7 @@ CONTAINS
          ik = kp_range(1) + ikpgr - 1
          kp => kpoint%kp_env(ikpgr)%kpoint_env
          DO ispin = 1, nspin
-            mo_set => kp%mos(1, ispin)%mo_set
+            mo_set => kp%mos(1, ispin)
             CALL get_mo_set(mo_set, eigenvalues=eigenvalues, occupation_numbers=occupation)
             eigenvalues(1:nmo) = weig(1:nmo, ik, ispin)
             occupation(1:nmo) = wocc(1:nmo, ik, ispin)
@@ -961,7 +962,7 @@ CONTAINS
       END IF
 
       ! work matrix
-      mo_set => kpoint%kp_env(1)%kpoint_env%mos(1, 1)%mo_set
+      mo_set => kpoint%kp_env(1)%kpoint_env%mos(1, 1)
       CALL get_mo_set(mo_set, nao=nao, nmo=nmo)
       CALL cp_fm_get_info(mo_set%mo_coeff, matrix_struct=matrix_struct)
       CALL cp_fm_create(fwork, matrix_struct)
@@ -972,7 +973,7 @@ CONTAINS
          kp => kpoint%kp_env(ikpgr)%kpoint_env
          nspin = SIZE(kp%mos, 2)
          DO ispin = 1, nspin
-            mo_set => kp%mos(1, ispin)%mo_set
+            mo_set => kp%mos(1, ispin)
             IF (wtype) THEN
                CALL get_mo_set(mo_set, eigenvalues=eigenvalues)
             END IF
@@ -1005,7 +1006,7 @@ CONTAINS
                END IF
                ! Re(c)*Re(c)
                CALL parallel_gemm("N", "T", nao, nao, nmo, 1.0_dp, mo_set%mo_coeff, fwork, 0.0_dp, rpmat)
-               mo_set => kp%mos(2, ispin)%mo_set
+               mo_set => kp%mos(2, ispin)
                ! Im(c)*Re(c)
                CALL parallel_gemm("N", "T", nao, nao, nmo, -1.0_dp, mo_set%mo_coeff, fwork, 0.0_dp, cpmat)
                ! Re(c)*Im(c)

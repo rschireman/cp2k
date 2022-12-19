@@ -45,7 +45,7 @@ MODULE task_list_methods
                               mp_alltoall, &
                               mp_bcast, &
                               mp_sum, &
-                              mp_sum_partial
+                              mp_sum_partial, mp_comm_type
    USE particle_types, ONLY: particle_type
    USE particle_methods, ONLY: get_particle_set
    USE pw_env_types, ONLY: pw_env_get, &
@@ -57,11 +57,10 @@ MODULE task_list_methods
    USE qs_neighbor_list_types, ONLY: neighbor_list_set_p_type
    USE realspace_grid_types, ONLY: realspace_grid_desc_p_type, &
                                    realspace_grid_desc_type, &
-                                   realspace_grid_p_type, &
                                    rs_grid_create, &
                                    rs_grid_locate_rank, &
                                    rs_grid_release, &
-                                   rs_grid_reorder_ranks
+                                   rs_grid_reorder_ranks, realspace_grid_type
    USE task_list_types, ONLY: deserialize_task, &
                               reallocate_tasks, &
                               serialize_task, &
@@ -164,7 +163,7 @@ CONTAINS
       TYPE(qs_kind_type), POINTER                        :: qs_kind
       TYPE(realspace_grid_desc_p_type), DIMENSION(:), &
          POINTER                                         :: rs_descs
-      TYPE(realspace_grid_p_type), DIMENSION(:), POINTER :: rs_grids
+      TYPE(realspace_grid_type), DIMENSION(:), POINTER :: rs_grids
       TYPE(task_type), DIMENSION(:), POINTER             :: tasks
 
       CALL timeset(routineN, handle)
@@ -336,9 +335,8 @@ CONTAINS
       IF (reorder_rs_grid_ranks) THEN
          DO i = 1, gridlevel_info%ngrid_levels
             IF (rs_descs(i)%rs_desc%distributed) THEN
-               CALL rs_grid_release(rs_grids(i)%rs_grid)
-               NULLIFY (rs_grids(i)%rs_grid)
-               CALL rs_grid_create(rs_grids(i)%rs_grid, rs_descs(i)%rs_desc)
+               CALL rs_grid_release(rs_grids(i))
+               CALL rs_grid_create(rs_grids(i), rs_descs(i)%rs_desc)
             END IF
          END DO
       END IF
@@ -520,7 +518,7 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       LOGICAL                                            :: soft
       CHARACTER(LEN=default_string_length)               :: basis_type
-      TYPE(realspace_grid_p_type), DIMENSION(:), POINTER :: rs_grids
+      TYPE(realspace_grid_type), DIMENSION(:), POINTER :: rs_grids
 
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
       INTEGER                                            :: nset, natoms, nkinds, ntasks, ikind, iatom, itask, nsgf
@@ -1157,7 +1155,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE optimize_load_list(list, group, my_pos)
       INTEGER, DIMENSION(:, :, 0:)                       :: list
-      INTEGER, INTENT(IN)                                :: group, my_pos
+      TYPE(mp_comm_type), INTENT(IN) :: group
+      INTEGER, INTENT(IN)                                :: my_pos
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'optimize_load_list'
       INTEGER, PARAMETER                                 :: rank_of_root = 0
@@ -2525,7 +2524,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(IN)       :: src_matrices
       TYPE(offload_buffer_type), INTENT(INOUT)           :: dest_buffer
       TYPE(task_list_type), INTENT(IN)                   :: task_list
-      INTEGER, INTENT(IN)                                :: group
+      TYPE(mp_comm_type), INTENT(IN)                     :: group
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'rs_scatter_matrices'
 
@@ -2560,7 +2559,7 @@ CONTAINS
       TYPE(offload_buffer_type), INTENT(IN)              :: src_buffer
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT)    :: dest_matrices
       TYPE(task_list_type), INTENT(IN)                   :: task_list
-      INTEGER, INTENT(IN)                                :: group
+      TYPE(mp_comm_type), INTENT(IN)                     :: group
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'rs_gather_matrices'
 

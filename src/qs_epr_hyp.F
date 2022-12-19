@@ -27,7 +27,8 @@ MODULE qs_epr_hyp
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
    USE mathconstants,                   ONLY: fourpi
-   USE message_passing,                 ONLY: mp_sum,&
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_sum,&
                                               mp_sync
    USE particle_types,                  ONLY: particle_type
    USE periodic_table,                  ONLY: ptable
@@ -49,7 +50,6 @@ MODULE qs_epr_hyp
                                               pw_pool_type
    USE pw_types,                        ONLY: COMPLEXDATA1D,&
                                               RECIPROCALSPACE,&
-                                              pw_p_type,&
                                               pw_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
@@ -83,10 +83,10 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(LEN=2)                                   :: element_symbol
-      INTEGER                                            :: bo(2), group, ia, iat, iatom, idir1, &
-                                                            idir2, ig, ikind, ir, iso, jatom, &
-                                                            mepos, natom, natomkind, nkind, &
-                                                            num_pe, output_unit, z
+      INTEGER                                            :: bo(2), ia, iat, iatom, idir1, idir2, ig, &
+                                                            ikind, ir, iso, jatom, mepos, natom, &
+                                                            natomkind, nkind, num_pe, output_unit, &
+                                                            z
       INTEGER, DIMENSION(:), POINTER                     :: atom_list
       LOGICAL                                            :: lsd, paw_atom
       REAL(dp)                                           :: arg, esum, hard_radius, hypanisotemp, &
@@ -101,12 +101,13 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(grid_atom_type), POINTER                      :: grid_atom
       TYPE(harmonics_atom_type), POINTER                 :: harmonics
+      TYPE(mp_comm_type)                                 :: group
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_grid_type), POINTER                        :: pw_grid
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_type)                                      :: hypaniso_gspace, rhototspin_elec_gspace
+      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: rho_rad_h, rho_rad_s
@@ -299,8 +300,8 @@ CONTAINS
       ! Load the contribution of the soft electronic density
       CALL qs_rho_get(rho, rho_g=rho_g)
       CPASSERT(SIZE(rho_g) > 1)
-      CALL pw_axpy(rho_g(1)%pw, rhototspin_elec_gspace)
-      CALL pw_axpy(rho_g(2)%pw, rhototspin_elec_gspace, alpha=-1._dp)
+      CALL pw_axpy(rho_g(1), rhototspin_elec_gspace)
+      CALL pw_axpy(rho_g(2), rhototspin_elec_gspace, alpha=-1._dp)
       ! grid to assemble anisotropic hyperfine terms
       CALL pw_pool_create_pw(auxbas_pw_pool, &
                              hypaniso_gspace, &

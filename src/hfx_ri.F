@@ -83,6 +83,7 @@ MODULE hfx_ri
                                               int_8
    USE machine,                         ONLY: m_walltime
    USE message_passing,                 ONLY: mp_cart_create,&
+                                              mp_comm_type,&
                                               mp_environ,&
                                               mp_sum,&
                                               mp_sync
@@ -102,7 +103,6 @@ MODULE hfx_ri
    USE qs_loc_utils,                    ONLY: qs_loc_control_init,&
                                               qs_loc_init
    USE qs_mo_types,                     ONLY: get_mo_set,&
-                                              mo_set_p_type,&
                                               mo_set_type
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type,&
                                               release_neighbor_list_sets
@@ -453,8 +453,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_ri_pre_scf_calc_tensors'
 
-      INTEGER                                            :: handle, i_mem, ibasis, mp_comm_t3c, &
-                                                            n_mem, natom, nkind
+      INTEGER                                            :: handle, i_mem, ibasis, n_mem, natom, &
+                                                            nkind
       INTEGER, ALLOCATABLE, DIMENSION(:) :: dist_AO_1, dist_AO_2, dist_RI, &
          ends_array_mc_block_int, ends_array_mc_int, sizes_AO, sizes_RI, &
          starts_array_mc_block_int, starts_array_mc_int
@@ -472,6 +472,7 @@ CONTAINS
       TYPE(gto_basis_set_p_type), ALLOCATABLE, &
          DIMENSION(:), TARGET                            :: basis_set_AO, basis_set_RI
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis, ri_basis
+      TYPE(mp_comm_type)                                 :: mp_comm_t3c
       TYPE(neighbor_list_3c_type)                        :: nl_3c
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: nl_2c_pot, nl_2c_RI
@@ -922,8 +923,8 @@ CONTAINS
       TYPE(hfx_ri_type), INTENT(INOUT)                   :: ri_data
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: ks_matrix
       REAL(KIND=dp), INTENT(OUT)                         :: ehfx
-      TYPE(mo_set_p_type), DIMENSION(:), OPTIONAL, &
-         POINTER                                         :: mos
+      TYPE(mo_set_type), DIMENSION(:), INTENT(IN), &
+         OPTIONAL                                        :: mos
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
       LOGICAL, INTENT(IN)                                :: geometry_did_change
       INTEGER, INTENT(IN)                                :: nspins
@@ -946,7 +947,6 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: my_ks_matrix, my_rho_ao
       TYPE(dbcsr_type), DIMENSION(2)                     :: mo_coeff_b
       TYPE(dbcsr_type), POINTER                          :: mo_coeff_b_tmp
-      TYPE(mo_set_type), POINTER                         :: mo_set
 
       CALL timeset(routineN, handle)
 
@@ -1001,15 +1001,14 @@ CONTAINS
          END IF
          DO ispin = 1, nspins
             NULLIFY (mo_coeff_b_tmp)
-            mo_set => mos(ispin)%mo_set
-            CPASSERT(mo_set%uniform_occupation)
-            CALL get_mo_set(mo_set=mo_set, mo_coeff=mo_coeff, eigenvalues=mo_eigenvalues, mo_coeff_b=mo_coeff_b_tmp)
+            CPASSERT(mos(ispin)%uniform_occupation)
+            CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff, eigenvalues=mo_eigenvalues, mo_coeff_b=mo_coeff_b_tmp)
 
             IF (.NOT. ri_data%do_loc) THEN
-               IF (.NOT. mo_set%use_mo_coeff_b) CALL copy_fm_to_dbcsr(mo_coeff, mo_coeff_b_tmp)
+               IF (.NOT. mos(ispin)%use_mo_coeff_b) CALL copy_fm_to_dbcsr(mo_coeff, mo_coeff_b_tmp)
                CALL dbcsr_copy(mo_coeff_b(ispin), mo_coeff_b_tmp)
             ELSE
-               IF (mo_set%use_mo_coeff_b) CALL copy_dbcsr_to_fm(mo_coeff_b_tmp, mo_coeff)
+               IF (mos(ispin)%use_mo_coeff_b) CALL copy_dbcsr_to_fm(mo_coeff_b_tmp, mo_coeff)
                CALL dbcsr_create(mo_coeff_b(ispin), template=mo_coeff_b_tmp)
             END IF
 
@@ -1023,6 +1022,7 @@ CONTAINS
          END DO
 
          IF (ri_data%do_loc) THEN
+            ALLOCATE (ri_data%qs_loc_env)
             CALL qs_loc_env_create(ri_data%qs_loc_env)
             CALL qs_loc_control_init(ri_data%qs_loc_env, ri_data%loc_subsection, do_homo=.TRUE.)
             CALL qs_loc_init(qs_env, ri_data%qs_loc_env, ri_data%loc_subsection, homo_localized)
@@ -1041,15 +1041,17 @@ CONTAINS
          END IF
 
          DO ispin = 1, nspins
-            mo_set => mos(ispin)%mo_set
             IF (ri_data%do_loc) THEN
                CALL copy_fm_to_dbcsr(moloc_coeff(ispin)%matrix, mo_coeff_b(ispin))
             END IF
-            CALL dbcsr_scale(mo_coeff_b(ispin), SQRT(mo_set%maxocc))
-            homo(ispin) = mo_set%homo
+            CALL dbcsr_scale(mo_coeff_b(ispin), SQRT(mos(ispin)%maxocc))
+            homo(ispin) = mos(ispin)%homo
          END DO
 
-         IF (ri_data%do_loc) CALL qs_loc_env_release(ri_data%qs_loc_env)
+         IF (ri_data%do_loc) THEN
+            CALL qs_loc_env_release(ri_data%qs_loc_env)
+            DEALLOCATE (ri_data%qs_loc_env)
+         END IF
          CALL timestop(handle2)
 
          CALL hfx_ri_update_ks_mo(qs_env, ri_data, my_ks_matrix, mo_coeff_b, homo, &
@@ -1133,9 +1135,10 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_ri_update_ks_mo'
 
-      INTEGER                                            :: bsize, bsum, comm_2d, handle, handle2, &
-                                                            i_mem, iblock, iproc, ispin, n_mem, &
-                                                            n_mos, nblock, nproc, unit_nr_dbcsr
+      INTEGER                                            :: bsize, bsum, comm_2d_handle, handle, &
+                                                            handle2, i_mem, iblock, iproc, ispin, &
+                                                            n_mem, n_mos, nblock, nproc, &
+                                                            unit_nr_dbcsr
       INTEGER(int_8)                                     :: nblks, nflop
       INTEGER, ALLOCATABLE, DIMENSION(:) :: batch_ranges_1, batch_ranges_2, dist1, dist2, dist3, &
          mem_end, mem_end_block_1, mem_end_block_2, mem_size, mem_start, mem_start_block_1, &
@@ -1151,6 +1154,7 @@ CONTAINS
       TYPE(dbt_type)                                     :: ks_t, ks_t_mat, mo_coeff_t, &
                                                             mo_coeff_t_split
       TYPE(dbt_type), DIMENSION(1, 1)                    :: t_3c_int_mo_1, t_3c_int_mo_2
+      TYPE(mp_comm_type)                                 :: comm_2d
 
       CALL timeset(routineN, handle)
 
@@ -1192,8 +1196,9 @@ CONTAINS
       ALLOCATE (bounds(2, 1))
 
       CALL dbcsr_get_info(ks_matrix(1, 1)%matrix, distribution=ks_dist)
-      CALL dbcsr_distribution_get(ks_dist, group=comm_2d, nprows=pdims_2d(1), npcols=pdims_2d(2))
+      CALL dbcsr_distribution_get(ks_dist, group=comm_2d_handle, nprows=pdims_2d(1), npcols=pdims_2d(2))
 
+      CALL comm_2d%set_handle(comm_2d_handle)
       pgrid_2d = dbt_nd_mp_comm(comm_2d, [1], [2], pdims_2d=pdims_2d)
 
       CALL create_2c_tensor(ks_t, dist1, dist2, pgrid_2d, ri_data%bsizes_AO_fit, ri_data%bsizes_AO_fit, &
@@ -2913,8 +2918,8 @@ CONTAINS
       REAL(KIND=dp), INTENT(IN)                          :: hf_fraction
       TYPE(dbcsr_p_type), DIMENSION(:, :), OPTIONAL      :: rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL         :: rho_ao_resp
-      TYPE(mo_set_p_type), DIMENSION(:), OPTIONAL, &
-         POINTER                                         :: mos
+      TYPE(mo_set_type), DIMENSION(:), INTENT(IN), &
+         OPTIONAL                                        :: mos
       LOGICAL, INTENT(IN), OPTIONAL                      :: use_virial, resp_only
       REAL(dp), INTENT(IN), OPTIONAL                     :: rescale_factor
 
@@ -2929,7 +2934,6 @@ CONTAINS
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(dbcsr_type), DIMENSION(2)                     :: mo_coeff_b
       TYPE(dbcsr_type), POINTER                          :: mo_coeff_b_tmp
-      TYPE(mo_set_type), POINTER                         :: mo_set
 
       CALL timeset(routineN, handle)
 
@@ -2943,15 +2947,14 @@ CONTAINS
          END IF
          DO ispin = 1, nspins
             NULLIFY (mo_coeff_b_tmp)
-            mo_set => mos(ispin)%mo_set
-            CPASSERT(mo_set%uniform_occupation)
-            CALL get_mo_set(mo_set=mo_set, mo_coeff=mo_coeff, eigenvalues=mo_eigenvalues, mo_coeff_b=mo_coeff_b_tmp)
+            CPASSERT(mos(ispin)%uniform_occupation)
+            CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff, eigenvalues=mo_eigenvalues, mo_coeff_b=mo_coeff_b_tmp)
 
             IF (.NOT. ri_data%do_loc) THEN
-               IF (.NOT. mo_set%use_mo_coeff_b) CALL copy_fm_to_dbcsr(mo_coeff, mo_coeff_b_tmp)
+               IF (.NOT. mos(ispin)%use_mo_coeff_b) CALL copy_fm_to_dbcsr(mo_coeff, mo_coeff_b_tmp)
                CALL dbcsr_copy(mo_coeff_b(ispin), mo_coeff_b_tmp)
             ELSE
-               IF (mo_set%use_mo_coeff_b) CALL copy_dbcsr_to_fm(mo_coeff_b_tmp, mo_coeff)
+               IF (mos(ispin)%use_mo_coeff_b) CALL copy_dbcsr_to_fm(mo_coeff_b_tmp, mo_coeff)
                CALL dbcsr_create(mo_coeff_b(ispin), template=mo_coeff_b_tmp)
             END IF
 
@@ -2965,6 +2968,7 @@ CONTAINS
          END DO
 
          IF (ri_data%do_loc) THEN
+            ALLOCATE (ri_data%qs_loc_env)
             CALL qs_loc_env_create(ri_data%qs_loc_env)
             CALL qs_loc_control_init(ri_data%qs_loc_env, ri_data%loc_subsection, do_homo=.TRUE.)
             CALL qs_loc_init(qs_env, ri_data%qs_loc_env, ri_data%loc_subsection, homo_localized)
@@ -2984,15 +2988,17 @@ CONTAINS
          END IF
 
          DO ispin = 1, nspins
-            mo_set => mos(ispin)%mo_set
             IF (ri_data%do_loc) THEN
                CALL copy_fm_to_dbcsr(moloc_coeff(ispin)%matrix, mo_coeff_b(ispin))
             END IF
-            CALL dbcsr_scale(mo_coeff_b(ispin), SQRT(mo_set%maxocc))
-            homo(ispin) = mo_set%homo
+            CALL dbcsr_scale(mo_coeff_b(ispin), SQRT(mos(ispin)%maxocc))
+            homo(ispin) = mos(ispin)%homo
          END DO
 
-         IF (ri_data%do_loc) CALL qs_loc_env_release(ri_data%qs_loc_env)
+         IF (ri_data%do_loc) THEN
+            CALL qs_loc_env_release(ri_data%qs_loc_env)
+            DEALLOCATE (ri_data%qs_loc_env)
+         END IF
 
          CALL hfx_ri_forces_mo(qs_env, ri_data, nspins, hf_fraction, mo_coeff_b, use_virial)
 
@@ -3035,8 +3041,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'precalc_derivatives'
 
-      INTEGER                                            :: handle, i_mem, i_xyz, ibasis, &
-                                                            mp_comm_t3c, n_mem, nkind
+      INTEGER                                            :: handle, i_mem, i_xyz, ibasis, n_mem, &
+                                                            nkind
       INTEGER(int_8)                                     :: nze, nze_tot
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: dist1, dist2, dist_AO_1, dist_AO_2, &
                                                             dist_RI, dummy_end, dummy_start, &
@@ -3055,6 +3061,7 @@ CONTAINS
       TYPE(gto_basis_set_p_type), ALLOCATABLE, &
          DIMENSION(:), TARGET                            :: basis_set_AO, basis_set_RI
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis, ri_basis
+      TYPE(mp_comm_type)                                 :: mp_comm_t3c
       TYPE(neighbor_list_3c_type)                        :: nl_3c
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: nl_2c
@@ -3763,8 +3770,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'get_RI_density_coeffs'
 
-      INTEGER                                            :: a, b, handle, i_mem, idx, mp_comm_t3c, &
-                                                            n_dependent, n_mem, n_mem_RI, natom, &
+      INTEGER                                            :: a, b, handle, i_mem, idx, n_dependent, &
+                                                            n_mem, n_mem_RI, natom, &
                                                             nblk_per_thread, nblks, nkind
       INTEGER(int_8)                                     :: nze
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: batch_block_end, batch_block_start, &
@@ -3789,6 +3796,7 @@ CONTAINS
       TYPE(dbt_type), DIMENSION(1, 1)                    :: t_3c_int_batched
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(distribution_3d_type)                         :: dist_nl3c
+      TYPE(mp_comm_type)                                 :: mp_comm_t3c
       TYPE(neighbor_list_3c_type)                        :: nl_3c
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set

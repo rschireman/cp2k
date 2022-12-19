@@ -41,9 +41,6 @@ CONTAINS
    SUBROUTINE create_exstate_section(section)
       TYPE(section_type), POINTER                        :: section
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'create_exstate_section', &
-         routineP = moduleN//':'//routineN
-
       TYPE(keyword_type), POINTER                        :: keyword
 
       CPASSERT(.NOT. ASSOCIATED(section))
@@ -74,6 +71,14 @@ CONTAINS
                           enum_c_vals=s2a("BEST_AVAILABLE", "ANALYTIC", "NUMERIC"), &
                           enum_i_vals=(/xc_kernel_method_best, xc_kernel_method_analytic, xc_kernel_method_numeric/), &
                           default_i_val=xc_kernel_method_best)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="OVERLAP_DELTAT", &
+                          description="Keyword for the computation of the overlap matrix between two consecutive time steps.", &
+                          usage="OVERLAP_DELTAT", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

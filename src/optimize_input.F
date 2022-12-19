@@ -44,6 +44,7 @@ MODULE optimize_input
                                               mp_comm_free,&
                                               mp_comm_split,&
                                               mp_comm_split_direct,&
+                                              mp_comm_type,&
                                               mp_environ,&
                                               mp_sum
    USE parallel_rng_types,              ONLY: UNIFORM,&
@@ -168,9 +169,8 @@ CONTAINS
       CHARACTER(len=default_string_length), &
          ALLOCATABLE, DIMENSION(:, :)                    :: initial_variables
       INTEGER :: color, energies_unit, handle, history_unit, i_atom, i_el, i_frame, i_free_var, &
-         i_var, ierr, mepos_master, mepos_slave, mpi_comm_master, mpi_comm_slave, &
-         mpi_comm_slave_primus, n_atom, n_el, n_frames, n_free_var, n_groups, n_var, new_env_id, &
-         num_pe_master, num_pe_slave, output_unit, restart_unit, state
+         i_var, ierr, mepos_master, mepos_slave, n_atom, n_el, n_frames, n_free_var, n_groups, &
+         n_var, new_env_id, num_pe_master, num_pe_slave, output_unit, restart_unit, state
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: free_var_index
       INTEGER, DIMENSION(:), POINTER                     :: group_distribution
       LOGICAL                                            :: should_stop
@@ -183,6 +183,8 @@ CONTAINS
                                                             force_traj_read, force_var, pos_traj, &
                                                             pos_traj_read
       TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(mp_comm_type)                                 :: mpi_comm_master, mpi_comm_slave, &
+                                                            mpi_comm_slave_primus
       TYPE(opt_state_type)                               :: ostate
       TYPE(section_vals_type), POINTER                   :: oi_section, variable_section
 
@@ -518,7 +520,7 @@ CONTAINS
       LOGICAL                                            :: at_end, test_ok
       REAL(KIND=dp)                                      :: cell_time, trj_epot, trj_time, vec(3), &
                                                             vol
-      TYPE(cp_parser_type), POINTER                      :: local_parser
+      TYPE(cp_parser_type)                               :: local_parser
 
       CALL timeset(routineN, handle)
 
@@ -527,7 +529,7 @@ CONTAINS
       ! trajectory
       n_frames = 0
       n_frames_current = 0
-      NULLIFY (local_parser, pos_traj, energy_traj, force_traj)
+      NULLIFY (pos_traj, energy_traj, force_traj)
       filename = oi_env%fm_env%ref_traj_file_name
       IF (filename .EQ. "") &
          CPABORT("The reference trajectory file name is empty")

@@ -39,6 +39,10 @@ case "$with_libxc" in
       [ -d libxc-${libxc_ver} ] && rm -rf libxc-${libxc_ver}
       tar -xzf libxc-${libxc_ver}.tar.gz
       cd libxc-${libxc_ver}
+
+      # Fix missing comma at end of line in src/mgga_xc_b97mv.c
+      patch -p1 < "${SCRIPT_DIR}/stage3/libxc-${libxc_ver}_mgga_xc_b97mv.patch"
+
       # CP2K does not make use of fourth derivatives, so skip their compilation with --disable-lxc
       ./configure --prefix="${pkg_install_dir}" --libdir="${pkg_install_dir}/lib" --disable-lxc \
         > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
@@ -48,7 +52,7 @@ case "$with_libxc" in
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage3/$(basename ${SCRIPT_NAME})"
     fi
     LIBXC_CFLAGS="-I'${pkg_install_dir}/include'"
-    LIBXC_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath='${pkg_install_dir}/lib'"
+    LIBXC_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
     ;;
   __SYSTEM__)
     echo "==================== Finding LIBXC from system paths ===================="
@@ -65,7 +69,7 @@ case "$with_libxc" in
     check_dir "${pkg_install_dir}/lib"
     check_dir "${pkg_install_dir}/include"
     LIBXC_CFLAGS="-I'${pkg_install_dir}/include'"
-    LIBXC_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath='${pkg_install_dir}/lib'"
+    LIBXC_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
     ;;
 esac
 if [ "$with_libxc" != "__DONTUSE__" ]; then

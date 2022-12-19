@@ -29,7 +29,8 @@ MODULE xray_diffraction
    USE mathconstants,                   ONLY: pi,&
                                               twopi
    USE memory_utilities,                ONLY: reallocate
-   USE message_passing,                 ONLY: mp_gather,&
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_gather,&
                                               mp_gatherv
    USE orbital_pointers,                ONLY: indco,&
                                               nco,&
@@ -54,7 +55,6 @@ MODULE xray_diffraction
                                               pw_pool_type
    USE pw_types,                        ONLY: COMPLEXDATA1D,&
                                               RECIPROCALSPACE,&
-                                              pw_p_type,&
                                               pw_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
@@ -97,9 +97,9 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'xray_diffraction_spectrum'
       INTEGER, PARAMETER                                 :: nblock = 100
 
-      INTEGER                                            :: group, handle, i, ig, ig_shell, ipe, &
-                                                            ishell, jg, ng, npe, nshell, &
-                                                            nshell_gather, source
+      INTEGER                                            :: handle, i, ig, ig_shell, ipe, ishell, &
+                                                            jg, ng, npe, nshell, nshell_gather, &
+                                                            source
       INTEGER(KIND=int_8)                                :: ngpts
       INTEGER, DIMENSION(3)                              :: npts
       INTEGER, DIMENSION(:), POINTER                     :: aux_index, ng_shell, ng_shell_gather, &
@@ -112,6 +112,7 @@ CONTAINS
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(mp_comm_type)                                 :: group
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
@@ -524,8 +525,8 @@ CONTAINS
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(paw_proj_set_type), POINTER                   :: paw_proj
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
       TYPE(pw_type)                                      :: rho_elec_gspace
+      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_r
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: cpc_h, cpc_s
@@ -582,7 +583,7 @@ CONTAINS
 
       DO ispin = 1, nspin
          CALL pw_zero(rho_elec_gspace)
-         CALL pw_transfer(rho_r(ispin)%pw, rho_elec_gspace, debug=.FALSE.)
+         CALL pw_transfer(rho_r(ispin), rho_elec_gspace, debug=.FALSE.)
          IF (PRESENT(fsign) .AND. (ispin == 2)) THEN
             alpha = fsign
          ELSE

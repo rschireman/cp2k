@@ -20,6 +20,7 @@ MODULE helium_types
    USE kinds,                           ONLY: default_string_length,&
                                               dp,&
                                               int_8
+   USE message_passing,                 ONLY: mp_comm_type
    USE parallel_rng_types,              ONLY: rng_stream_type
    USE splines_types,                   ONLY: spline_data_type
 #include "../base/base_uses.f90"
@@ -89,8 +90,6 @@ MODULE helium_types
 ! ***************************************************************************
    TYPE helium_solvent_type
 
-      INTEGER                           :: id_nr !< identification number of this data structure
-      INTEGER                           :: ref_count !< reference count of this data structure
       TYPE(section_vals_type), POINTER  :: input !< input data structure (the whole tree)
       TYPE(cp_logger_type), POINTER     :: logger
 
@@ -295,7 +294,7 @@ MODULE helium_types
 ! ***************************************************************************
    TYPE helium_solvent_p_type
       TYPE(helium_solvent_type), POINTER   :: helium
-      INTEGER                              :: comm
+      TYPE(mp_comm_type)                   :: comm
       INTEGER, DIMENSION(:), POINTER       :: env_all
    END TYPE helium_solvent_p_type
 

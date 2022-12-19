@@ -80,6 +80,7 @@ MODULE mixed_cdft_utils
                                               dp
    USE message_passing,                 ONLY: mp_irecv,&
                                               mp_isend,&
+                                              mp_request_type,&
                                               mp_sum,&
                                               mp_wait,&
                                               mp_waitall
@@ -110,7 +111,7 @@ MODULE mixed_cdft_utils
                                               qs_kind_type
    USE realspace_grid_types,            ONLY: realspace_grid_desc_p_type,&
                                               realspace_grid_input_type,&
-                                              realspace_grid_p_type,&
+                                              realspace_grid_type,&
                                               rs_grid_create,&
                                               rs_grid_create_descriptor,&
                                               rs_grid_print
@@ -566,6 +567,7 @@ CONTAINS
             CALL cp_abort(__LOCATION__, &
                           "Parallel mode mixed CDFT does not support Hirshfeld constraints.")
 
+         ALLOCATE (mixed_cdft%cdft_control)
          CALL cdft_control_create(mixed_cdft%cdft_control)
          cdft_control => mixed_cdft%cdft_control
          ALLOCATE (cdft_control%atoms(settings%ncdft))
@@ -642,7 +644,7 @@ CONTAINS
       CHARACTER(len=default_path_length)                 :: c_val, input_file_path, output_file_path
       INTEGER                                            :: i, imap, iounit, j, lp, n_force_eval, &
                                                             ncpu, nforce_eval, ntargets, offset, &
-                                                            req(3), unit_nr
+                                                            unit_nr
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: bounds
       INTEGER, DIMENSION(2, 3)                           :: bo, bo_mixed
       INTEGER, DIMENSION(3)                              :: higher_grid_layout
@@ -655,6 +657,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_subsys_type), POINTER                      :: subsys_mix
       TYPE(global_environment_type), POINTER             :: globenv
+      TYPE(mp_request_type), DIMENSION(3)                :: req
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_grid_type), POINTER                        :: pw_grid
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
@@ -664,7 +667,7 @@ CONTAINS
       TYPE(realspace_grid_desc_p_type), DIMENSION(:), &
          POINTER                                         :: rs_descs
       TYPE(realspace_grid_input_type)                    :: input_settings
-      TYPE(realspace_grid_p_type), DIMENSION(:), POINTER :: rs_grids
+      TYPE(realspace_grid_type), DIMENSION(:), POINTER   :: rs_grids
       TYPE(section_vals_type), POINTER :: force_env_section, force_env_sections, kind_section, &
          print_section, root_section, rs_grid_section, subsys_section
 
@@ -798,9 +801,8 @@ CONTAINS
             NULLIFY (rs_descs(1)%rs_desc)
             CALL rs_grid_create_descriptor(rs_descs(1)%rs_desc, pw_grid, input_settings)
             IF (rs_descs(1)%rs_desc%distributed) higher_grid_layout = rs_descs(1)%rs_desc%group_dim
-            NULLIFY (rs_grids(1)%rs_grid)
-            CALL rs_grid_create(rs_grids(1)%rs_grid, rs_descs(1)%rs_desc)
-            CALL rs_grid_print(rs_grids(1)%rs_grid, iounit)
+            CALL rs_grid_create(rs_grids(1), rs_descs(1)%rs_desc)
+            CALL rs_grid_print(rs_grids(1), iounit)
             mixed_cdft%pw_env%rs_descs => rs_descs
             mixed_cdft%pw_env%rs_grids => rs_grids
             ! qs_kind_set

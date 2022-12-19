@@ -19,14 +19,13 @@ MODULE cp_cfm_types
                                               cp_fm_struct_retain,&
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_type
-   USE cp_log_handling,                 ONLY: cp_to_string
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE kinds,                           ONLY: dp
    USE mathconstants,                   ONLY: z_one,&
                                               z_zero
    USE message_passing,                 ONLY: &
-        cp2k_is_parallel, mp_allgather, mp_any_source, mp_bcast, mp_irecv, mp_isend, mp_proc_null, &
-        mp_request_null, mp_sum, mp_waitall
+        cp2k_is_parallel, mp_allgather, mp_any_source, mp_bcast, mp_comm_type, mp_irecv, mp_isend, &
+        mp_proc_null, mp_request_null, mp_request_type, mp_sum, mp_waitall
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
@@ -35,8 +34,6 @@ MODULE cp_cfm_types
    LOGICAL, PRIVATE, PARAMETER :: debug_this_module = .TRUE.
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_cfm_types'
    INTEGER, PARAMETER, PRIVATE :: src_tag = 3, dest_tag = 5, send_tag = 7, recv_tag = 11
-
-   INTEGER, SAVE, PRIVATE :: last_cfm_id_nr = 0
 
    PUBLIC :: cp_cfm_type, cp_cfm_p_type, copy_cfm_info_type
    PUBLIC :: cp_cfm_cleanup_copy_general, &
@@ -62,8 +59,6 @@ MODULE cp_cfm_types
 ! **************************************************************************************************
 !> \brief Represent a complex full matrix.
 !> \param name           the name of the matrix, used for printing
-!> \param id_nr         identification number that makes this matrix unique
-!> \param ref_cont      reference count (see doc/ReferenceCounting.html)
 !> \param matrix_struct structure of this matrix
 !> \param local_data    array with the data of the matrix (its content depends on
 !>                      the matrix type used: in parallel run it will be in
@@ -71,7 +66,6 @@ MODULE cp_cfm_types
 ! **************************************************************************************************
    TYPE cp_cfm_type
       CHARACTER(len=60) :: name
-      INTEGER :: id_nr
       TYPE(cp_fm_struct_type), POINTER :: matrix_struct
       COMPLEX(kind=dp), DIMENSION(:, :), POINTER, CONTIGUOUS :: local_data
    END TYPE cp_cfm_type
@@ -103,7 +97,7 @@ MODULE cp_cfm_types
       !> displacements into recv_buf
       INTEGER, ALLOCATABLE, DIMENSION(:)          :: recv_disp
       !> MPI requests for non-blocking receive and send operations
-      INTEGER, ALLOCATABLE, DIMENSION(:)          :: recv_request, send_request
+      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:)          :: recv_request, send_request
       !> global column and row indices of locally stored elements of the destination matrix
       INTEGER, DIMENSION(:), POINTER              :: recv_col_indices, recv_row_indices
       !> rank of MPI process with BLACS coordinates (prow, pcol)
@@ -138,8 +132,6 @@ CONTAINS
       context => matrix_struct%context
       matrix%matrix_struct => matrix_struct
       CALL cp_fm_struct_retain(matrix%matrix_struct)
-      last_cfm_id_nr = last_cfm_id_nr + 1
-      matrix%id_nr = last_cfm_id_nr
 
       nprow = context%num_pe(1)
       npcol = context%num_pe(2)
@@ -155,7 +147,7 @@ CONTAINS
       IF (PRESENT(name)) THEN
          matrix%name = name
       ELSE
-         matrix%name = 'full matrix'//cp_to_string(matrix%id_nr)
+         matrix%name = 'full complex matrix'
       END IF
    END SUBROUTINE cp_cfm_create
 
@@ -890,8 +882,8 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_cfm_start_copy_general'
 
-      INTEGER :: dest_p_i, dest_q_j, global_comm, global_rank, global_size, handle, i, j, k, &
-         mpi_rank, ncol_block_dest, ncol_block_src, ncol_local_recv, ncol_local_send, ncols, &
+      INTEGER :: dest_p_i, dest_q_j, global_rank, global_size, handle, i, j, k, mpi_rank, &
+         ncol_block_dest, ncol_block_src, ncol_local_recv, ncol_local_send, ncols, &
          nrow_block_dest, nrow_block_src, nrow_local_recv, nrow_local_send, nrows, p, q, &
          recv_rank, recv_size, send_rank, send_size
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: all_ranks, dest2global, dest_p, dest_q, &
@@ -900,10 +892,11 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: dest_blacs2mpi
       INTEGER, DIMENSION(2)                              :: dest_block, dest_block_tmp, dest_num_pe, &
                                                             src_block, src_block_tmp, src_num_pe
-      INTEGER, DIMENSION(6)                              :: recv_req, send_req
       INTEGER, DIMENSION(:), POINTER                     :: recv_col_indices, recv_row_indices, &
                                                             send_col_indices, send_row_indices
       TYPE(cp_fm_struct_type), POINTER                   :: recv_dist, send_dist
+      TYPE(mp_comm_type)                                 :: global_comm
+      TYPE(mp_request_type), DIMENSION(6)                :: recv_req, send_req
 
       CALL timeset(routineN, handle)
 

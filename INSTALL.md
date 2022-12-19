@@ -119,9 +119,9 @@ there are several freely available alternatives:
   - Recently a [ScaLAPACK installer](http://www.netlib.org/scalapack/scalapack_installer.tgz)
     has been added that simplifies the installation.
 
-CP2K assumes that the MPI library implements MPI version 3. If you have an older
-version of MPI (e.g., MPI 2.0) available you must define `-D__MPI_VERSION=2` in
-the arch file.
+CP2K assumes that the MPI library implements MPI version 3. Older
+versions of MPI (e.g., MPI 2.0) are not supported and the old flag `-D__MPI_VERSION` in
+the arch file will be ignored.
 
 ### 2f. FFTW (optional, improved performance of FFTs)
 
@@ -197,7 +197,7 @@ the FFTW3 threading library libfftw3_threads (or libfftw3_omp) is required.
 
 - The version 5.1.0 (or later) of LIBXC can be downloaded from <https://www.tddft.org/programs/libxc>
 - CP2K does not make use of fourth derivates such that LIBXC may be configured
-  with './configure --disable-lxc \<other LIBXC configuration flags\>'.
+  with './configure --disable-lxc \<other LIBXC configuration flags>'.
 - During the installation, the directories `$(LIBXC_DIR)/lib`
   and `$(LIBXC_DIR)/include` are created.
 - Add `-D__LIBXC` to DFLAGS, `-I$(LIBXC_DIR)/include` to FCFLAGS
@@ -320,7 +320,12 @@ SIRIUS is a domain specific library for electronic structure calculations.
   please see <https://brehm-research.de/bqb> for more information as well as
   the `bqbtool` to inspect BQB files.
 
-### 2t. ROCM/HIP (Support for AMD GPU)
+### 2t. Torch (Machine Learning Framework needed for NequIP)
+
+- The C++ API of PyTorch can be downloaded from https://pytorch.org/get-started/locally/.
+- Add `-D__LIBTORCH` to the DFLAGS to enable support for libtorch.
+
+### 2u. ROCM/HIP (Support for AMD GPU)
 
 The code for the HIP based grid backend was developed and tested on Mi100 but
 should work out of the box on Nvidia hardware as well.
@@ -333,8 +338,7 @@ should work out of the box on Nvidia hardware as well.
 - Add `GPUVER=Mi50, Mi60, Mi100, Mi250`
 - Add `OFFLOAD_CC = hipcc`
 - Add  `-lamdhip64` to the `LIBS` variable
-- Add `OFFLOAD_FLAGS = '-fopenmp -m64 -pthread -fPIC -D__GRID_HIP -O2
-  --offload-arch=gfx908 --rocm-path=$(ROCM_PATH)'` where `ROCM_PATH` is the path
+- Add `OFFLOAD_FLAGS = '-fopenmp -m64 -pthread -fPIC -D__GRID_HIP -O2 --offload-arch=gfx908 --rocm-path=$(ROCM_PATH)'` where `ROCM_PATH` is the path
   where the rocm sdk resides. Architectures Mi250 (gfx90a), Mi100 (gfx908),
   Mi50 (gfx906) the hip backend for the grid library supports nvidia hardware
   as well. It uses the same code and can be used to validate the backend in case
@@ -350,7 +354,7 @@ should work out of the box on Nvidia hardware as well.
 - Use `-D__OFFLOAD_PROFILING` to turn on the AMD ROC TX and Tracer libray.
   It requires to link `-lroctx64 -lroctracer64`.
 
-### 2u. OpenCL Devices
+### 2v. OpenCL Devices
 
 OpenCL devices are currently supported for DBCSR and can cover GPUs and other devices.
 Kernels can be automatically tuned like for the CUDA/HIP backend in DBCSR.
@@ -395,7 +399,7 @@ Note: the OpenCL backend uses some functionality from LIBXSMM (dependency).
 - Refer to <https://cp2k.github.io/dbcsr/> for, e.g., environment variables,
   or how to tune kernels (auto tuned parameters).
 
-### 2v. matrix-matrix multiplication offloading on GPU using SPLA
+### 2w. matrix-matrix multiplication offloading on GPU using SPLA
 
 The SPLA library is a hard dependency of SIRIUS but can also be used as a
 standalone library. It provides a generic interface to the blas gemm family with
@@ -409,7 +413,7 @@ internal criteria to decide if it is worth to do the operation on GPU or not.
 Calls to `offload_dgemm` also accept pointers on GPU or a combination of them.
 
 <!---
-### 2w. LibMaxwell (External Maxwell Solver)
+### 2x. LibMaxwell (External Maxwell Solver)
 
 - LibMaxwell is a library to solve the time-dependent Maxwell equations
   and use the resulting electric field in MD runs or real-time propagation.
@@ -429,13 +433,13 @@ Alternatively, <https://dashboard.cp2k.org> provides sample arch files as part o
 the testing reports (click on the status field, search for 'ARCH-file').
 
 - With -DNDEBUG assertions may be stripped ("compiled out").
-- NDEBUG is the ANSI-conforming symbol name (not __NDEBUG).
+- NDEBUG is the ANSI-conforming symbol name (not \_\_NDEBUG).
 - Regular release builds may carry assertions for safety.
 
 Conventionally, there are six versions:
 
-| Acronym |             Meaning              |
-|---------|----------------------------------|
+| Acronym | Meaning                          |
+| ------- | -------------------------------- |
 | sdbg    | OpenMP + debug settings          |
 | sopt    | OpenMP + OMP_NUM_THREADS=1       |
 | ssmp    | OpenMP                           |
@@ -589,4 +593,4 @@ can be generated using the cp2k executable, see <https://manual.cp2k.org/trunk/g
 
 ## 8. Happy computing
 
- The CP2K team.
+The CP2K team.

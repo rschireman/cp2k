@@ -17,8 +17,7 @@ MODULE xas_tdp_types
                                               cp_2d_r_p_type,&
                                               cp_3d_r_p_type
    USE cp_files,                        ONLY: file_exists
-   USE cp_fm_types,                     ONLY: cp_fm_p_type,&
-                                              cp_fm_release,&
+   USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
    USE cp_para_env,                     ONLY: cp_para_env_release
    USE cp_para_types,                   ONLY: cp_para_env_type
@@ -51,8 +50,8 @@ MODULE xas_tdp_types
                                               grid_atom_type
    USE qs_harmonics_atom,               ONLY: deallocate_harmonics_atom,&
                                               harmonics_atom_type
-   USE qs_loc_types,                    ONLY: qs_loc_env_new_type,&
-                                              qs_loc_env_release
+   USE qs_loc_types,                    ONLY: qs_loc_env_release,&
+                                              qs_loc_env_type
    USE qs_ot_types,                     ONLY: qs_ot_settings_init,&
                                               qs_ot_settings_type
 #include "./base/base_uses.f90"
@@ -204,7 +203,7 @@ MODULE xas_tdp_types
       TYPE(donor_state_type), DIMENSION(:), &
          POINTER   :: donor_states
       INTEGER, DIMENSION(:, :, :), POINTER     :: mos_of_ex_atoms
-      TYPE(qs_loc_env_new_type), POINTER       :: qs_loc_env
+      TYPE(qs_loc_env_type), POINTER       :: qs_loc_env
       REAL(dp), DIMENSION(:, :), POINTER       :: ri_inv_coul
       REAL(dp), DIMENSION(:, :), POINTER       :: ri_inv_ex
       TYPE(distribution_2d_type), POINTER      :: opt_dist2d_coul
@@ -221,7 +220,7 @@ MODULE xas_tdp_types
       TYPE(dbcsr_p_type), DIMENSION(:), &
          POINTER   :: orb_soc
       TYPE(cp_fm_type), POINTER               :: matrix_shalf
-      TYPE(cp_fm_p_type), DIMENSION(:), &
+      TYPE(cp_fm_type), DIMENSION(:), &
          POINTER                              :: lumo_evecs
 
       TYPE(cp_1d_r_p_type), DIMENSION(:), &
@@ -784,6 +783,7 @@ CONTAINS
          END IF
          IF (ASSOCIATED(xas_tdp_env%qs_loc_env)) THEN
             CALL qs_loc_env_release(xas_tdp_env%qs_loc_env)
+            DEALLOCATE (xas_tdp_env%qs_loc_env)
          END IF
          IF (ASSOCIATED(xas_tdp_env%mos_of_ex_atoms)) THEN
             DEALLOCATE (xas_tdp_env%mos_of_ex_atoms)
@@ -845,8 +845,7 @@ CONTAINS
          END IF
          IF (ASSOCIATED(xas_tdp_env%lumo_evecs)) THEN
             DO i = 1, SIZE(xas_tdp_env%lumo_evecs)
-               CALL cp_fm_release(xas_tdp_env%lumo_evecs(i)%matrix)
-               DEALLOCATE (xas_tdp_env%lumo_evecs(i)%matrix)
+               CALL cp_fm_release(xas_tdp_env%lumo_evecs(i))
             END DO
             DEALLOCATE (xas_tdp_env%lumo_evecs)
          END IF

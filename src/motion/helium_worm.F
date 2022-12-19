@@ -48,8 +48,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE helium_sample_worm(helium, pint_env)
 
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
 
       CHARACTER(len=default_string_length)               :: stmp
       INTEGER :: ac, iatom, ibead, icrawl, iMC, imove, ncentracc, ncentratt, ncloseacc, ncloseatt, &
@@ -226,6 +226,7 @@ CONTAINS
                   nMC = helium%iter_rot
                   ncycle = 0
                   helium%pos = helium%savepos
+                  helium%work = helium%pos
                   helium%permutation = helium%savepermutation
                   helium%iperm = helium%saveiperm
                   CPWARN("Trapped in open state, reset helium to closed state from last MD step.")
@@ -345,7 +346,6 @@ CONTAINS
 
       !CALL center_pos(helium)
 
-      RETURN
    END SUBROUTINE helium_sample_worm
 
 ! **************************************************************************************************
@@ -359,8 +359,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_centroid_move(pint_env, helium, iatom, drmax, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: iatom
       REAL(KIND=dp), INTENT(IN)                          :: drmax
       INTEGER, INTENT(OUT)                               :: ac
@@ -545,8 +545,6 @@ CONTAINS
       END DO
       helium%worm_xtra_bead(:) = helium%worm_xtra_bead_work(:)
 
-      RETURN
-
    END SUBROUTINE worm_centroid_move
 
 ! **************************************************************************************************
@@ -562,7 +560,7 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_centroid_move_action(helium, pos, iatom, xtrapos, winc) &
       RESULT(partaction)
 
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: iatom
@@ -759,8 +757,8 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_centroid_move_inter_action(pint_env, helium, pos, iatom, xtrapos, winc) &
       RESULT(partaction)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(IN)              :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: iatom
@@ -876,9 +874,9 @@ CONTAINS
    SUBROUTINE path_construct(helium, ri, rj, l, new_path)
 
       !constructs a path of length l between the positions ri and rj
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: ri, rj
-      INTEGER                                            :: l
+      INTEGER, INTENT(IN)                                :: l
       REAL(KIND=dp), DIMENSION(3, l), INTENT(OUT)        :: new_path
 
       INTEGER                                            :: idim, istage
@@ -917,8 +915,6 @@ CONTAINS
          new_path(:, istage) = new_path(:, istage) + weight*(rk*new_path(:, istage - 1) + re(:))
       END DO
 
-      RETURN
-
    END SUBROUTINE path_construct
 
 ! **************************************************************************************************
@@ -933,8 +929,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_staging_move(pint_env, helium, startatom, startbead, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: startatom, startbead, l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -1160,8 +1156,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_open_move(pint_env, helium, endatom, endbead, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: endatom, endbead, l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -1411,8 +1407,6 @@ CONTAINS
       helium%worm_atom_idx = helium%worm_atom_idx_work
       helium%worm_bead_idx = helium%worm_bead_idx_work
 
-      RETURN
-
    END SUBROUTINE worm_open_move
 
 ! **************************************************************************************************
@@ -1425,8 +1419,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_close_move(pint_env, helium, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -1646,8 +1640,6 @@ CONTAINS
          END DO
       END IF
 
-      RETURN
-
    END SUBROUTINE worm_close_move
 
 ! **************************************************************************************************
@@ -1660,8 +1652,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_head_move(pint_env, helium, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -1897,8 +1889,6 @@ CONTAINS
       END IF
       helium%worm_xtra_bead(:) = helium%worm_xtra_bead_work(:)
 
-      RETURN
-
    END SUBROUTINE worm_head_move
 
 ! **************************************************************************************************
@@ -1911,8 +1901,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_tail_move(pint_env, helium, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -2127,8 +2117,6 @@ CONTAINS
          END DO
       END IF
 
-      RETURN
-
    END SUBROUTINE worm_tail_move
 
 ! **************************************************************************************************
@@ -2141,8 +2129,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_crawl_move_forward(pint_env, helium, l, ac)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -2414,8 +2402,6 @@ CONTAINS
       helium%worm_bead_idx = helium%worm_bead_idx_work
       helium%worm_atom_idx = helium%worm_atom_idx_work
 
-      RETURN
-
    END SUBROUTINE worm_crawl_move_forward
 
 ! **************************************************************************************************
@@ -2428,8 +2414,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_crawl_move_backward(pint_env, helium, l, ac)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -2685,8 +2671,6 @@ CONTAINS
       helium%worm_bead_idx = helium%worm_bead_idx_work
       helium%worm_atom_idx = helium%worm_atom_idx_work
 
-      RETURN
-
    END SUBROUTINE worm_crawl_move_backward
 
 ! **************************************************************************************************
@@ -2700,7 +2684,7 @@ CONTAINS
 ! **************************************************************************************************
    REAL(KIND=dp) FUNCTION free_density_matrix(helium, startpos, endpos, l) RESULT(rho)
 
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(helium_solvent_type), INTENT(IN)              :: helium
       REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: startpos, endpos
       INTEGER, INTENT(IN)                                :: l
 
@@ -2716,8 +2700,6 @@ CONTAINS
       rho = EXP(rho)
       rho = rho*(SQRT(prefac/pi))**3
 
-      RETURN
-
    END FUNCTION free_density_matrix
 
 ! **************************************************************************************************
@@ -2731,8 +2713,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE worm_swap_move(pint_env, helium, natoms, l, ac)
 
-      TYPE(pint_env_type), INTENT(INOUT), POINTER        :: pint_env
-      TYPE(helium_solvent_type), INTENT(INOUT), POINTER  :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       INTEGER, INTENT(IN)                                :: natoms, l
       INTEGER, INTENT(OUT)                               :: ac
 
@@ -2771,6 +2753,10 @@ CONTAINS
                                                      helium%pos(:, iatom, endbead), l + 1)
       END DO
       forwarddensmatsum = SUM(forwarddensmat)
+      IF (forwarddensmatsum == 0.0_dp) THEN
+         ac = 0
+         RETURN
+      END IF
 
       ! Select an atom with its corresponding probability
       rtmp = helium%rng_stream_uniform%next()*forwarddensmatsum
@@ -2781,6 +2767,10 @@ CONTAINS
       END DO
       ! just for numerical safety
       fendatom = MIN(fendatom, natoms)
+      IF (fendatom == excludeatom) THEN
+         ac = 0
+         RETURN
+      END IF
 
       ! ensure detailed balance
       IF (endbead > startbead) THEN
@@ -3046,8 +3036,6 @@ CONTAINS
          END DO
       END IF
 
-      RETURN
-
    END SUBROUTINE worm_swap_move
 
 ! **************************************************************************************************
@@ -3064,7 +3052,7 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_path_action(helium, pos, &
                                            startatom, startbead, endatom, endbead) RESULT(partaction)
 
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: startatom, startbead, endatom, endbead
@@ -3122,8 +3110,6 @@ CONTAINS
       END IF
       DEALLOCATE (work, work2, work3)
 
-      RETURN
-
    END FUNCTION worm_path_action
 
 ! **************************************************************************************************
@@ -3143,7 +3129,7 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_path_action_worm_corrected(helium, pos, &
                                    startatom, startbead, endatom, endbead, xtrapos, worm_atom_idx, worm_bead_idx) RESULT(partaction)
 
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(helium_solvent_type), INTENT(INOUT)           :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: startatom, startbead, endatom, endbead
@@ -3372,8 +3358,6 @@ CONTAINS
       END IF
       DEALLOCATE (work, work2, work3)
 
-      RETURN
-
    END FUNCTION worm_path_action_worm_corrected
 
 ! **************************************************************************************************
@@ -3391,8 +3375,8 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_path_inter_action(pint_env, helium, pos, &
                                                  startatom, startbead, endatom, endbead) RESULT(partaction)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(IN)              :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: startatom, startbead, endatom, endbead
@@ -3434,8 +3418,6 @@ CONTAINS
 
       partaction = partaction*helium%tau
 
-      RETURN
-
    END FUNCTION worm_path_inter_action
 
 ! **************************************************************************************************
@@ -3454,8 +3436,8 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_path_inter_action_head(pint_env, helium, pos, &
                                                      startatom, startbead, xtrapos, worm_atom_idx, worm_bead_idx) RESULT(partaction)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(IN)              :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: startatom, startbead
@@ -3496,8 +3478,6 @@ CONTAINS
 
       partaction = partaction*helium%tau
 
-      RETURN
-
    END FUNCTION worm_path_inter_action_head
 
 ! **************************************************************************************************
@@ -3515,8 +3495,8 @@ CONTAINS
    REAL(KIND=dp) FUNCTION worm_path_inter_action_tail(pint_env, helium, pos, &
                                                       endatom, endbead, worm_atom_idx, worm_bead_idx) RESULT(partaction)
 
-      TYPE(pint_env_type), INTENT(IN), POINTER           :: pint_env
-      TYPE(helium_solvent_type), INTENT(IN), POINTER     :: helium
+      TYPE(pint_env_type), INTENT(IN)                    :: pint_env
+      TYPE(helium_solvent_type), INTENT(IN)              :: helium
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN), &
          POINTER                                         :: pos
       INTEGER, INTENT(IN)                                :: endatom, endbead, worm_atom_idx, &
@@ -3555,8 +3535,6 @@ CONTAINS
       END IF
 
       partaction = partaction*helium%tau
-
-      RETURN
 
    END FUNCTION worm_path_inter_action_tail
 

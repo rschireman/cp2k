@@ -50,7 +50,8 @@ MODULE almo_scf_qs
                                               do_bondparm_covalent,&
                                               do_bondparm_vdw
    USE kinds,                           ONLY: dp
-   USE message_passing,                 ONLY: mp_allgather
+   USE message_passing,                 ONLY: mp_allgather,&
+                                              mp_comm_type
    USE molecule_types,                  ONLY: get_molecule_set_info,&
                                               molecule_type
    USE particle_types,                  ONLY: particle_type
@@ -63,8 +64,9 @@ MODULE almo_scf_qs
                                               qs_ks_env_type,&
                                               set_ks_env
    USE qs_mo_types,                     ONLY: allocate_mo_set,&
+                                              deallocate_mo_set,&
                                               init_mo_set,&
-                                              mo_set_p_type
+                                              mo_set_type
    USE qs_neighbor_list_types,          ONLY: get_iterator_info,&
                                               neighbor_list_iterate,&
                                               neighbor_list_iterator_create,&
@@ -580,13 +582,14 @@ CONTAINS
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct_tmp
       TYPE(cp_fm_type)                                   :: mo_fm_copy
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
 
       CALL timeset(routineN, handle)
 
       ! create and init scf_env (this is necessary to return MOs to qs)
       NULLIFY (mos, fm_struct_tmp, scf_env)
+      ALLOCATE (scf_env)
       CALL scf_env_create(scf_env)
 
       !CALL qs_scf_env_initialize(qs_env, scf_env)
@@ -600,7 +603,9 @@ CONTAINS
 
          ! Currently only fm version of mo_set is usable.
          ! First transform the matrix_t to fm version
-         CALL allocate_mo_set(mo_set=mos(ispin)%mo_set, &
+         ! Empty the containers to prevent memory leaks
+         CALL deallocate_mo_set(mos(ispin))
+         CALL allocate_mo_set(mo_set=mos(ispin), &
                               nao=nrow_fm, &
                               nmo=ncol_fm, &
                               nelectron=almo_scf_env%nelectrons_total, &
@@ -616,7 +621,7 @@ CONTAINS
          CALL cp_fm_struct_release(fm_struct_tmp)
          !CALL copy_dbcsr_to_fm(almo_scf_env%matrix_t(ispin), mo_fm_copy)
 
-         CALL init_mo_set(mos(ispin)%mo_set, fm_ref=mo_fm_copy, name='fm_mo')
+         CALL init_mo_set(mos(ispin), fm_ref=mo_fm_copy, name='fm_mo')
 
          CALL cp_fm_release(mo_fm_copy)
 
@@ -867,6 +872,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(dbcsr_type)                                   :: matrix_s_sym
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
+      TYPE(mp_comm_type)                                 :: group
       TYPE(neighbor_list_iterator_p_type), &
          DIMENSION(:), POINTER                           :: nl_iterator, nl_iterator2
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
@@ -940,6 +946,7 @@ CONTAINS
 
       CALL dbcsr_get_info(almo_scf_env%quench_t(ispin), distribution=dist)
       CALL dbcsr_distribution_get(dist, numnodes=nNodes, group=GroupID, mynode=mynode)
+      CALL group%set_handle(groupid)
 
       ! create global atom neighbor list from the local lists
       ! first, calculate number of local pairs
@@ -973,7 +980,7 @@ CONTAINS
 
       ! third, communicate local length to the other nodes
       ALLOCATE (list_length_cpu(nNodes), list_offset_cpu(nNodes))
-      CALL mp_allgather(2*local_list_length, list_length_cpu, GroupID)
+      CALL mp_allgather(2*local_list_length, list_length_cpu, group)
 
       ! fourth, create a global list
       list_offset_cpu(1) = 0
@@ -986,7 +993,7 @@ CONTAINS
       ! fifth, communicate all list data
       ALLOCATE (global_list(global_list_length))
       CALL mp_allgather(local_list, global_list, &
-                        list_length_cpu, list_offset_cpu, GroupID)
+                        list_length_cpu, list_offset_cpu, group)
       DEALLOCATE (list_length_cpu, list_offset_cpu)
       DEALLOCATE (local_list)
 
@@ -1389,7 +1396,7 @@ CONTAINS
 
       ! first, communicate map sizes on the other nodes
       ALLOCATE (domain_entries_cpu(nNodes), offset_for_cpu(nNodes))
-      CALL mp_allgather(2*domain_map_local_entries, domain_entries_cpu, GroupID)
+      CALL mp_allgather(2*domain_map_local_entries, domain_entries_cpu, group)
 
       ! second, create
       offset_for_cpu(1) = 0
@@ -1407,7 +1414,7 @@ CONTAINS
          domain_map_local(2*ientry) = almo_scf_env%domain_map(ispin)%pairs(ientry, 2)
       END DO
       CALL mp_allgather(domain_map_local, domain_map_global, &
-                        domain_entries_cpu, offset_for_cpu, GroupID)
+                        domain_entries_cpu, offset_for_cpu, group)
       DEALLOCATE (domain_entries_cpu, offset_for_cpu)
       DEALLOCATE (domain_map_local)
 

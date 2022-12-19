@@ -7,11 +7,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
 # From https://elpa.mpcdf.mpg.de/software/tarball-archive/ELPA_TARBALL_ARCHIVE.html
-elpa_ver="2022.05.001"
-elpa_sha256="207e6f26d6532fb70373afc3ef3d38255213af61def659c25dad3a30e4fca38b"
-patches=(
-  "${SCRIPT_DIR}/stage5/elpa-${elpa_ver}-fix_nvcc_wrap.patch"
-)
+elpa_ver="2022.11.001.rc2"
+elpa_sha256="13d67e7d69894c631b48e4fcac905b51c4e41554c7eb4731e98c4e205f0fab9f"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -24,8 +21,6 @@ source "${INSTALLDIR}"/toolchain.env
 ELPA_CFLAGS=''
 ELPA_LDFLAGS=''
 ELPA_LIBS=''
-# ELPA 2019.05.001 has a parallel build issue, restricting to -j1
-ELPA_MAKEOPTS='-j1'
 elpa_dir_openmp="_openmp"
 
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
@@ -78,9 +73,7 @@ case "$with_elpa" in
       # with long lines, and that a bunch of libs can be found
       cd elpa-${elpa_ver}
 
-      for patch in "${patches[@]}"; do
-        patch -p1 < "${patch}"
-      done
+      patch -p1 < "${SCRIPT_DIR}/stage5/elpa-fix_nvcc_wrap.patch"
 
       # ELPA-2017xxxx enables AVX2 by default, switch off if machine doesn't support it.
       AVX_flag=""
@@ -116,6 +109,8 @@ case "$with_elpa" in
           --enable-openmp=${enable_openmp} \
           --enable-shared=no \
           --enable-static=yes \
+          --disable-c-tests \
+          --disable-cpp-tests \
           ${config_flags} \
           --enable-nvidia-gpu=$([ "$TARGET" = "nvidia" ] && echo "yes" || echo "no") \
           --with-cuda-path=${CUDA_PATH:-${CUDA_HOME:-/CUDA_HOME-notset}} \
@@ -126,13 +121,13 @@ case "$with_elpa" in
           CC=${MPICC} \
           CXX=${MPICXX} \
           CPP="cpp -E" \
-          FCFLAGS="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} -ffree-line-length-none ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags}" \
-          CFLAGS="${CFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags}" \
-          CXXFLAGS="${CXXFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags}" \
+          FCFLAGS="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} -ffree-line-length-none ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
+          CFLAGS="${CFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
+          CXXFLAGS="${CXXFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
           LDFLAGS="-Wl,--allow-multiple-definition -Wl,--enable-new-dtags ${MATH_LDFLAGS} ${SCALAPACK_LDFLAGS} ${cray_ldflags}" \
           LIBS="${SCALAPACK_LIBS} $(resolve_string "${MATH_LIBS}" "MPI")" \
           > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-        make -j $(get_nprocs) ${ELPA_MAKEOPTS} > make.log 2>&1 || tail -n ${LOG_LINES} make.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
         make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
         cd ..
       done
@@ -141,7 +136,7 @@ case "$with_elpa" in
     fi
     [ "$enable_openmp" != "yes" ] && elpa_dir_openmp=""
     ELPA_CFLAGS="-I'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/include/elpa${elpa_dir_openmp}-${elpa_ver}/modules' -I'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/include/elpa${elpa_dir_openmp}-${elpa_ver}/elpa'"
-    ELPA_LDFLAGS="-L'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib' -Wl,-rpath='${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib'"
+    ELPA_LDFLAGS="-L'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib' -Wl,-rpath,'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib'"
     ;;
   __SYSTEM__)
     echo "==================== Finding ELPA from system paths ===================="
@@ -175,7 +170,7 @@ case "$with_elpa" in
       echo "Cannot find elpa_openmp-* from path $user_include_path"
       exit 1
     fi
-    ELPA_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath='${pkg_install_dir}/lib'"
+    ELPA_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
     ;;
 esac
 if [ "$with_elpa" != "__DONTUSE__" ]; then
@@ -208,7 +203,7 @@ EOF
 
   cat << EOF >> ${INSTALLDIR}/lsan.supp
 # leaks related to ELPA
-leak:cublasXtDeviceSelect
+leak:cublasCreateFromC
 EOF
 fi
 

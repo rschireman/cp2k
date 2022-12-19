@@ -68,7 +68,7 @@ MODULE qs_wf_history_methods
                                               REALDATA3D,&
                                               REALSPACE,&
                                               RECIPROCALSPACE,&
-                                              pw_p_type
+                                              pw_type
    USE qs_density_matrices,             ONLY: calculate_density_matrix
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
@@ -81,7 +81,7 @@ MODULE qs_wf_history_methods
                                               make_basis_simple,&
                                               make_basis_sm
    USE qs_mo_types,                     ONLY: get_mo_set,&
-                                              mo_set_p_type
+                                              mo_set_type
    USE qs_rho_methods,                  ONLY: qs_rho_update_rho
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_set,&
@@ -100,7 +100,6 @@ MODULE qs_wf_history_methods
 
    LOGICAL, PRIVATE, PARAMETER :: debug_this_module = .TRUE.
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_wf_history_methods'
-   INTEGER, SAVE, PRIVATE :: last_wfs_id = 0, last_wfi_id = 0
 
    PUBLIC :: wfi_create, wfi_update, wfi_create_for_kp, &
              wfi_extrapolate, wfi_get_method_label, &
@@ -117,16 +116,12 @@ CONTAINS
 !> \author fawzi
 ! **************************************************************************************************
    SUBROUTINE wfs_create(snapshot)
-      TYPE(qs_wf_snapshot_type), POINTER                 :: snapshot
+      TYPE(qs_wf_snapshot_type), INTENT(OUT)             :: snapshot
 
-      ALLOCATE (snapshot)
-      last_wfs_id = last_wfs_id + 1
-      snapshot%id_nr = last_wfs_id
       NULLIFY (snapshot%wf, snapshot%rho_r, &
                snapshot%rho_g, snapshot%rho_ao, snapshot%rho_ao_kp, &
                snapshot%overlap, snapshot%rho_frozen)
       snapshot%dt = 1.0_dp
-      snapshot%ref_count = 1
    END SUBROUTINE wfs_create
 
 ! **************************************************************************************************
@@ -154,10 +149,10 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g, rho_r
       TYPE(qs_rho_type), POINTER                         :: rho
 
       CALL timeset(routineN, handle)
@@ -172,10 +167,10 @@ CONTAINS
       CPASSERT(ASSOCIATED(wf_history))
       CPASSERT(ASSOCIATED(dft_control))
       IF (.NOT. ASSOCIATED(snapshot)) THEN
+         ALLOCATE (snapshot)
          CALL wfs_create(snapshot)
       END IF
       CPASSERT(wf_history%ref_count > 0)
-      CPASSERT(snapshot%ref_count > 0)
 
       nspins = dft_control%nspins
       snapshot%dt = 1.0_dp
@@ -184,15 +179,14 @@ CONTAINS
          CALL get_qs_env(qs_env, mos=mos)
          IF (.NOT. ASSOCIATED(snapshot%wf)) THEN
             CALL fm_pools_create_fm_vect(ao_mo_pools, snapshot%wf, &
-                                         name="ws_snap"//TRIM(ADJUSTL(cp_to_string(snapshot%id_nr)))// &
-                                         "ws")
+                                         name="ws_snap-ws")
             CPASSERT(nspins == SIZE(snapshot%wf))
          END IF
          DO ispin = 1, nspins
-            CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff)
-            CALL cp_fm_to_fm(mo_coeff, snapshot%wf(ispin)%matrix)
+            CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff)
+            CALL cp_fm_to_fm(mo_coeff, snapshot%wf(ispin))
          END DO
-      ELSE IF (ASSOCIATED(snapshot%wf)) THEN
+      ELSE
          CALL fm_pools_give_back_fm_vect(ao_mo_pools, snapshot%wf)
       END IF
 
@@ -202,18 +196,16 @@ CONTAINS
          IF (.NOT. ASSOCIATED(snapshot%rho_r)) THEN
             ALLOCATE (snapshot%rho_r(nspins))
             DO ispin = 1, nspins
-               ALLOCATE (snapshot%rho_r(ispin)%pw)
-               CALL pw_pool_create_pw(auxbas_pw_pool, snapshot%rho_r(ispin)%pw, &
+               CALL pw_pool_create_pw(auxbas_pw_pool, snapshot%rho_r(ispin), &
                                       in_space=REALSPACE, use_data=REALDATA3D)
             END DO
          END IF
          DO ispin = 1, nspins
-            CALL pw_copy(rho_r(ispin)%pw, snapshot%rho_r(ispin)%pw)
+            CALL pw_copy(rho_r(ispin), snapshot%rho_r(ispin))
          END DO
       ELSE IF (ASSOCIATED(snapshot%rho_r)) THEN
          DO ispin = 1, SIZE(snapshot%rho_r)
-            CALL pw_pool_give_back_pw(auxbas_pw_pool, snapshot%rho_r(ispin)%pw)
-            DEALLOCATE (snapshot%rho_r(ispin)%pw)
+            CALL pw_pool_give_back_pw(auxbas_pw_pool, snapshot%rho_r(ispin))
          END DO
          DEALLOCATE (snapshot%rho_r)
       END IF
@@ -224,18 +216,16 @@ CONTAINS
          IF (.NOT. ASSOCIATED(snapshot%rho_g)) THEN
             ALLOCATE (snapshot%rho_g(nspins))
             DO ispin = 1, nspins
-               ALLOCATE (snapshot%rho_g(ispin)%pw)
-               CALL pw_pool_create_pw(auxbas_pw_pool, snapshot%rho_g(ispin)%pw, &
+               CALL pw_pool_create_pw(auxbas_pw_pool, snapshot%rho_g(ispin), &
                                       in_space=RECIPROCALSPACE, use_data=COMPLEXDATA1D)
             END DO
          END IF
          DO ispin = 1, nspins
-            CALL pw_copy(rho_g(ispin)%pw, snapshot%rho_g(ispin)%pw)
+            CALL pw_copy(rho_g(ispin), snapshot%rho_g(ispin))
          END DO
       ELSE IF (ASSOCIATED(snapshot%rho_g)) THEN
          DO ispin = 1, SIZE(snapshot%rho_g)
-            CALL pw_pool_give_back_pw(auxbas_pw_pool, snapshot%rho_g(ispin)%pw)
-            DEALLOCATE (snapshot%rho_g(ispin)%pw)
+            CALL pw_pool_give_back_pw(auxbas_pw_pool, snapshot%rho_g(ispin))
          END DO
          DEALLOCATE (snapshot%rho_g)
       END IF
@@ -321,8 +311,6 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       ALLOCATE (wf_history)
-      last_wfi_id = last_wfi_id + 1
-      wf_history%id_nr = last_wfi_id
       wf_history%ref_count = 1
       wf_history%memory_depth = 0
       wf_history%snapshot_count = 0
@@ -491,7 +479,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao, rho_frozen_ao
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(qs_wf_snapshot_type), POINTER                 :: t0_state, t1_state
 
@@ -509,7 +497,6 @@ CONTAINS
       CPASSERT(ASSOCIATED(wf_history))
       CPASSERT(wf_history%ref_count > 0)
       CPASSERT(ASSOCIATED(qs_env))
-      CPASSERT(qs_env%ref_count > 0)
       CALL get_qs_env(qs_env, mos=mos, rho=rho, do_kpoints=do_kpoints)
       CALL mpools_get(qs_env%mpools, ao_mo_fm_pools=ao_mo_fm_pools)
       ! chooses the method for this extrapolation
@@ -602,12 +589,12 @@ CONTAINS
          CALL wfi_set_history_variables(qs_env=qs_env, nvec=nvec)
          CALL qs_rho_get(rho, rho_ao=rho_ao)
          DO ispin = 1, SIZE(mos)
-            CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff, &
+            CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff, &
                             nmo=nmo)
             CALL reorthogonalize_vectors(qs_env, &
                                          v_matrix=mo_coeff, &
                                          n_col=nmo)
-            CALL calculate_density_matrix(mo_set=mos(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_set=mos(ispin), &
                                           density_matrix=rho_ao(ispin)%matrix)
          END DO
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
@@ -670,20 +657,20 @@ CONTAINS
          t2 = t1 + dt
          CALL qs_rho_get(rho, rho_ao=rho_ao)
          DO ispin = 1, SIZE(mos)
-            CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff, &
+            CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff, &
                             nmo=nmo)
             CALL cp_fm_scale_and_add(alpha=0.0_dp, &
                                      matrix_a=mo_coeff, &
-                                     matrix_b=t1_state%wf(ispin)%matrix, &
+                                     matrix_b=t1_state%wf(ispin), &
                                      beta=(t2 - t0)/(t1 - t0))
             ! this copy should be unnecessary
             CALL cp_fm_scale_and_add(alpha=1.0_dp, &
                                      matrix_a=mo_coeff, &
-                                     beta=(t1 - t2)/(t1 - t0), matrix_b=t0_state%wf(ispin)%matrix)
+                                     beta=(t1 - t2)/(t1 - t0), matrix_b=t0_state%wf(ispin))
             CALL reorthogonalize_vectors(qs_env, &
                                          v_matrix=mo_coeff, &
                                          n_col=nmo)
-            CALL calculate_density_matrix(mo_set=mos(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_set=mos(ispin), &
                                           density_matrix=rho_ao(ispin)%matrix)
          END DO
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
@@ -768,7 +755,7 @@ CONTAINS
          CALL qs_rho_get(rho, rho_ao=rho_ao)
          DO ispin = 1, SIZE(mos)
             NULLIFY (mo_coeff, matrix_struct, matrix_struct_new)
-            CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+            CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff)
             CALL cp_fm_get_info(mo_coeff, nrow_global=n, ncol_global=k, &
                                 matrix_struct=matrix_struct)
             CALL cp_fm_struct_create(matrix_struct_new, template_fmstruct=matrix_struct, &
@@ -777,19 +764,19 @@ CONTAINS
             CALL cp_fm_struct_release(matrix_struct_new)
 
             IF (use_overlap) THEN
-               CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin)%matrix, mo_coeff, k)
-               CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, mo_coeff, 0.0_dp, csc)
+               CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin), mo_coeff, k)
+               CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), mo_coeff, 0.0_dp, csc)
             ELSE
-               CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, &
-                                  t1_state%wf(ispin)%matrix, 0.0_dp, csc)
+               CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), &
+                                  t1_state%wf(ispin), 0.0_dp, csc)
             END IF
-            CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin)%matrix, csc, 0.0_dp, mo_coeff)
+            CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin), csc, 0.0_dp, mo_coeff)
             CALL cp_fm_release(csc)
-            CALL cp_fm_scale_and_add(-1.0_dp, mo_coeff, 2.0_dp, t1_state%wf(ispin)%matrix)
+            CALL cp_fm_scale_and_add(-1.0_dp, mo_coeff, 2.0_dp, t1_state%wf(ispin))
             CALL reorthogonalize_vectors(qs_env, &
                                          v_matrix=mo_coeff, &
                                          n_col=k)
-            CALL calculate_density_matrix(mo_set=mos(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_set=mos(ispin), &
                                           density_matrix=rho_ao(ispin)%matrix)
          END DO
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
@@ -816,7 +803,7 @@ CONTAINS
          my_orthogonal_wf = .TRUE.
          DO ispin = 1, SIZE(mos)
             NULLIFY (mo_coeff, matrix_struct, matrix_struct_new)
-            CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+            CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff)
             CALL cp_fm_get_info(mo_coeff, nrow_global=n, ncol_global=k, &
                                 matrix_struct=matrix_struct)
             CALL cp_fm_create(fm_tmp, matrix_struct)
@@ -826,20 +813,20 @@ CONTAINS
             CALL cp_fm_struct_release(matrix_struct_new)
             ! first the most recent
             t1_state => wfi_get_snapshot(wf_history, wf_index=1)
-            CALL cp_fm_to_fm(t1_state%wf(ispin)%matrix, mo_coeff)
+            CALL cp_fm_to_fm(t1_state%wf(ispin), mo_coeff)
             alpha = nvec
             CALL cp_fm_scale(alpha, mo_coeff)
             CALL qs_rho_get(rho, rho_ao=rho_ao)
             DO i = 2, nvec
                t0_state => wfi_get_snapshot(wf_history, wf_index=i)
                IF (use_overlap) THEN
-                  CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin)%matrix, fm_tmp, k)
-                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, fm_tmp, 0.0_dp, csc)
+                  CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin), fm_tmp, k)
+                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), fm_tmp, 0.0_dp, csc)
                ELSE
-                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, &
-                                     t1_state%wf(ispin)%matrix, 0.0_dp, csc)
+                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), &
+                                     t1_state%wf(ispin), 0.0_dp, csc)
                END IF
-               CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin)%matrix, csc, 0.0_dp, fm_tmp)
+               CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin), csc, 0.0_dp, fm_tmp)
                alpha = -1.0_dp*alpha*REAL(nvec - i + 1, dp)/REAL(i, dp)
                CALL cp_fm_scale_and_add(1.0_dp, mo_coeff, alpha, fm_tmp)
             END DO
@@ -849,7 +836,7 @@ CONTAINS
             CALL reorthogonalize_vectors(qs_env, &
                                          v_matrix=mo_coeff, &
                                          n_col=k)
-            CALL calculate_density_matrix(mo_set=mos(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_set=mos(ispin), &
                                           density_matrix=rho_ao(ispin)%matrix)
          END DO
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
@@ -880,7 +867,7 @@ CONTAINS
          CALL qs_rho_get(rho, rho_ao=rho_ao)
          DO ispin = 1, SIZE(mos)
             NULLIFY (mo_coeff, matrix_struct, matrix_struct_new)
-            CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+            CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff)
             CALL cp_fm_get_info(mo_coeff, &
                                 nrow_global=n, &
                                 ncol_global=k, &
@@ -895,7 +882,7 @@ CONTAINS
             ! first the most recent
             t1_state => wfi_get_snapshot(wf_history, &
                                          wf_index=1)
-            CALL cp_fm_to_fm(t1_state%wf(ispin)%matrix, mo_coeff)
+            CALL cp_fm_to_fm(t1_state%wf(ispin), mo_coeff)
             alpha = REAL(4*nvec - 2, KIND=dp)/REAL(nvec + 1, KIND=dp)
             IF ((io_unit > 0) .AND. (print_level > low_print_level)) THEN
                WRITE (UNIT=io_unit, FMT="(/,T2,A,/,/,T3,A,I0,/,/,T3,A2,I0,A4,F10.6)") &
@@ -908,13 +895,13 @@ CONTAINS
             DO i = 2, nvec
                t0_state => wfi_get_snapshot(wf_history, wf_index=i)
                IF (use_overlap) THEN
-                  CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin)%matrix, fm_tmp, k)
-                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, fm_tmp, 0.0_dp, csc)
+                  CALL cp_dbcsr_sm_fm_multiply(t0_state%overlap, t1_state%wf(ispin), fm_tmp, k)
+                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), fm_tmp, 0.0_dp, csc)
                ELSE
-                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin)%matrix, &
-                                     t1_state%wf(ispin)%matrix, 0.0_dp, csc)
+                  CALL parallel_gemm('T', 'N', k, k, n, 1.0_dp, t0_state%wf(ispin), &
+                                     t1_state%wf(ispin), 0.0_dp, csc)
                END IF
-               CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin)%matrix, csc, 0.0_dp, fm_tmp)
+               CALL parallel_gemm('N', 'N', n, k, k, 1.0_dp, t0_state%wf(ispin), csc, 0.0_dp, fm_tmp)
                alpha = (-1.0_dp)**(i + 1)*REAL(i, KIND=dp)* &
                        binomial(2*nvec, nvec - i)/binomial(2*nvec - 2, nvec - 1)
                IF ((io_unit > 0) .AND. (print_level > low_print_level)) THEN
@@ -928,7 +915,7 @@ CONTAINS
             CALL reorthogonalize_vectors(qs_env, &
                                          v_matrix=mo_coeff, &
                                          n_col=k)
-            CALL calculate_density_matrix(mo_set=mos(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_set=mos(ispin), &
                                           density_matrix=rho_ao(ispin)%matrix)
          END DO
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
@@ -954,18 +941,9 @@ CONTAINS
 !>      11.2006 created [TdK]
 !> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
 ! **************************************************************************************************
-   SUBROUTINE wfi_set_history_variables(qs_env, nvec)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
+   ELEMENTAL SUBROUTINE wfi_set_history_variables(qs_env, nvec)
+      TYPE(qs_environment_type), INTENT(INOUT)           :: qs_env
       INTEGER, INTENT(IN)                                :: nvec
-
-      CHARACTER(len=*), PARAMETER :: routineN = 'wfi_set_history_variables'
-
-      INTEGER                                            :: handle
-
-      CALL timeset(routineN, handle)
-
-      CPASSERT(ASSOCIATED(qs_env))
-      CPASSERT(qs_env%ref_count > 0)
 
       IF (nvec >= qs_env%wf_history%memory_depth) THEN
          IF ((qs_env%scf_control%max_scf_hist .NE. 0) .AND. (qs_env%scf_control%eps_scf_hist .NE. 0)) THEN
@@ -980,8 +958,6 @@ CONTAINS
             qs_env%scf_control%outer_scf%eps_scf = qs_env%scf_control%eps_scf_hist
          END IF
       END IF
-
-      CALL timestop(handle)
 
    END SUBROUTINE wfi_set_history_variables
 
@@ -1002,7 +978,6 @@ CONTAINS
       CPASSERT(ASSOCIATED(wf_history))
       CPASSERT(wf_history%ref_count > 0)
       CPASSERT(ASSOCIATED(qs_env))
-      CPASSERT(qs_env%ref_count > 0)
 
       wf_history%snapshot_count = wf_history%snapshot_count + 1
       IF (wf_history%memory_depth > 0) THEN
@@ -1109,7 +1084,6 @@ CONTAINS
                                      extension=".scfLog")
 
       CPASSERT(ASSOCIATED(qs_env))
-      CPASSERT(qs_env%ref_count > 0)
       CPASSERT(ASSOCIATED(qs_env%wf_history))
       CPASSERT(qs_env%wf_history%ref_count > 0)
       CALL get_qs_env(qs_env, dft_control=dft_control)

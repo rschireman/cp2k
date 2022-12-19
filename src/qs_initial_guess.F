@@ -63,6 +63,7 @@ MODULE qs_initial_guess
    USE kpoint_io,                       ONLY: read_kpoints_restart
    USE kpoint_types,                    ONLY: kpoint_type
    USE message_passing,                 ONLY: mp_bcast,&
+                                              mp_comm_type,&
                                               mp_sum
    USE particle_methods,                ONLY: get_particle_set
    USE particle_types,                  ONLY: particle_type
@@ -81,8 +82,8 @@ MODULE qs_initial_guess
                                               make_basis_sm
    USE qs_mo_occupation,                ONLY: set_mo_occupation
    USE qs_mo_types,                     ONLY: get_mo_set,&
-                                              mo_set_p_type,&
                                               mo_set_restrict,&
+                                              mo_set_type,&
                                               reassign_allocated_mos
    USE qs_mom_methods,                  ONLY: do_mom_guess
    USE qs_rho_methods,                  ONLY: qs_rho_update_rho
@@ -139,10 +140,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_first_density_matrix'
 
       CHARACTER(LEN=default_path_length)                 :: file_name, filename
-      INTEGER :: atom_a, blk, density_guess, group, handle, homo, i, iatom, ic, icol, id_nr, &
-         ikind, irow, iseed(4), ispin, istart_col, istart_row, j, last_read, n, n_cols, n_rows, &
-         nao, natom, natoms, natoms_tmp, nblocks, nelectron, nmo, nmo_tmp, not_read, nsgf, nspin, &
-         nvec, ounit, qs_env_id, safe_density_guess, size_atomic_kind_set, z
+      INTEGER :: atom_a, blk, density_guess, handle, homo, i, iatom, ic, icol, id_nr, ikind, irow, &
+         iseed(4), ispin, istart_col, istart_row, j, last_read, n, n_cols, n_rows, nao, natom, &
+         natoms, natoms_tmp, nblocks, nelectron, nmo, nmo_tmp, not_read, nsgf, nspin, nvec, ounit, &
+         safe_density_guess, size_atomic_kind_set, z
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: first_sgf, kind_of, last_sgf
       INTEGER, DIMENSION(2)                              :: nelectron_spin
       INTEGER, DIMENSION(:), POINTER                     :: atom_list, elec_conf, nelec_kind, &
@@ -173,7 +174,8 @@ CONTAINS
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
       TYPE(hfx_type), DIMENSION(:, :), POINTER           :: x_data
       TYPE(kpoint_type), POINTER                         :: kpoints
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mo_array, mos_last_converged
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mo_array, mos_last_converged
+      TYPE(mp_comm_type)                                 :: group
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
@@ -205,7 +207,6 @@ CONTAINS
                       matrix_ks_kp=matrix_ks_kp, &
                       input=input, &
                       scf_control=scf_control, &
-                      id_nr=qs_env_id, &
                       dft_control=dft_control, &
                       has_unit_metric=has_unit_metric, &
                       do_kpoints=do_kpoints, &
@@ -386,12 +387,12 @@ CONTAINS
             ELSE
                DO ispin = 1, nspin
                   IF (scf_control%level_shift /= 0.0_dp) THEN
-                     CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, mo_coeff=mo_coeff)
+                     CALL get_mo_set(mo_set=mo_array(ispin), mo_coeff=mo_coeff)
                      CALL cp_fm_to_fm(mo_coeff, ortho)
                   END IF
 
                   ! make all nmo vectors present orthonormal
-                  CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+                  CALL get_mo_set(mo_set=mo_array(ispin), &
                                   mo_coeff=mo_coeff, nmo=nmo, homo=homo)
 
                   IF (has_unit_metric) THEN
@@ -424,11 +425,11 @@ CONTAINS
                DO ispin = 1, nspin
 
                   IF (scf_control%use_ot .OR. scf_env%method == ot_diag_method_nr) THEN !fm->dbcsr
-                     CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                           mo_array(ispin)%mo_set%mo_coeff_b) !fm->dbcsr
+                     CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                           mo_array(ispin)%mo_coeff_b) !fm->dbcsr
                   END IF !fm->dbcsr
 
-                  CALL calculate_density_matrix(mo_array(ispin)%mo_set, &
+                  CALL calculate_density_matrix(mo_array(ispin), &
                                                 p_rmpv(ispin)%matrix)
                END DO
             END IF ! natom_mismatch
@@ -453,12 +454,12 @@ CONTAINS
 
                DO ispin = 1, nspin
                   IF (scf_control%level_shift /= 0.0_dp) THEN
-                     CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, mo_coeff=mo_coeff)
+                     CALL get_mo_set(mo_set=mo_array(ispin), mo_coeff=mo_coeff)
                      CALL cp_fm_to_fm(mo_coeff, ortho)
                   END IF
 
                   ! make all nmo vectors present orthonormal
-                  CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, mo_coeff=mo_coeff, nmo=nmo, homo=homo)
+                  CALL get_mo_set(mo_set=mo_array(ispin), mo_coeff=mo_coeff, nmo=nmo, homo=homo)
 
                   IF (has_unit_metric) THEN
                      CALL make_basis_simple(mo_coeff, nmo)
@@ -472,16 +473,16 @@ CONTAINS
                IF (dft_control%restricted) CALL mo_set_restrict(mo_array)
 
                DO ispin = 1, nspin
-                  CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, &
+                  CALL set_mo_occupation(mo_set=mo_array(ispin), &
                                          smear=qs_env%scf_control%smear)
                END DO
 
                DO ispin = 1, nspin
                   IF (scf_control%use_ot .OR. scf_env%method == ot_diag_method_nr) THEN !fm->dbcsr
-                     CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                           mo_array(ispin)%mo_set%mo_coeff_b) !fm->dbcsr
+                     CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                           mo_array(ispin)%mo_coeff_b) !fm->dbcsr
                   END IF !fm->dbcsr
-                  CALL calculate_density_matrix(mo_array(ispin)%mo_set, p_rmpv(ispin)%matrix)
+                  CALL calculate_density_matrix(mo_array(ispin), p_rmpv(ispin)%matrix)
                END DO
 
                ! Write to extrapolation pipeline
@@ -495,7 +496,7 @@ CONTAINS
       IF (density_guess == random_guess) THEN
 
          DO ispin = 1, nspin
-            CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+            CALL get_mo_set(mo_set=mo_array(ispin), &
                             mo_coeff=mo_coeff, nmo=nmo)
             CALL cp_fm_init_random(mo_coeff, nmo)
             IF (has_unit_metric) THEN
@@ -509,18 +510,18 @@ CONTAINS
          IF (dft_control%restricted) CALL mo_set_restrict(mo_array)
 
          DO ispin = 1, nspin
-            CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, &
+            CALL set_mo_occupation(mo_set=mo_array(ispin), &
                                    smear=qs_env%scf_control%smear)
          END DO
 
          DO ispin = 1, nspin
 
             IF (scf_control%use_ot .OR. scf_env%method == ot_diag_method_nr) THEN !fm->dbcsr
-               CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                     mo_array(ispin)%mo_set%mo_coeff_b) !fm->dbcsr
+               CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                     mo_array(ispin)%mo_coeff_b) !fm->dbcsr
             END IF !fm->dbcsr
 
-            CALL calculate_density_matrix(mo_array(ispin)%mo_set, p_rmpv(ispin)%matrix)
+            CALL calculate_density_matrix(mo_array(ispin), p_rmpv(ispin)%matrix)
          END DO
 
          did_guess = .TRUE.
@@ -547,7 +548,7 @@ CONTAINS
          END IF
 
          IF (need_wm) THEN
-            CALL get_mo_set(mo_set=mo_array(1)%mo_set, mo_coeff=moa)
+            CALL get_mo_set(mo_set=mo_array(1), mo_coeff=moa)
             CALL cp_fm_get_info(moa, matrix_struct=ao_mo_struct)
             CALL cp_fm_struct_get(ao_mo_struct, nrow_global=nao, nrow_block=nblocks)
             CALL cp_fm_struct_create(fmstruct=ao_ao_struct, &
@@ -575,14 +576,14 @@ CONTAINS
          ! molecular orbitals (MOs)
          IF (has_unit_metric) THEN
             CALL eigensolver_simple(matrix_ks=work1(ispin)%matrix, &
-                                    mo_set=mo_array(ispin)%mo_set, &
+                                    mo_set=mo_array(ispin), &
                                     work=work2, &
                                     do_level_shift=.FALSE., &
                                     level_shift=0.0_dp, &
                                     use_jacobi=.FALSE., jacobi_threshold=0._dp)
          ELSE
             CALL eigensolver(matrix_ks_fm=work1(ispin)%matrix, &
-                             mo_set=mo_array(ispin)%mo_set, &
+                             mo_set=mo_array(ispin), &
                              ortho=ortho, &
                              work=work2, &
                              cholesky_method=scf_env%cholesky_method, &
@@ -593,16 +594,16 @@ CONTAINS
 
          ! Open shell case: copy alpha MOs to beta MOs
          IF (nspin == 2) THEN
-            CALL get_mo_set(mo_set=mo_array(1)%mo_set, mo_coeff=moa)
-            CALL get_mo_set(mo_set=mo_array(2)%mo_set, mo_coeff=mob, nmo=nmo)
+            CALL get_mo_set(mo_set=mo_array(1), mo_coeff=moa)
+            CALL get_mo_set(mo_set=mo_array(2), mo_coeff=mob, nmo=nmo)
             CALL cp_fm_to_fm(moa, mob, nmo)
          END IF
 
          ! Build an initial density matrix (for each spin in the case of
          ! an open shell calculation) from the first MOs set
          DO ispin = 1, nspin
-            CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, smear=scf_control%smear)
-            CALL calculate_density_matrix(mo_array(ispin)%mo_set, p_rmpv(ispin)%matrix)
+            CALL set_mo_occupation(mo_set=mo_array(ispin), smear=scf_control%smear)
+            CALL calculate_density_matrix(mo_array(ispin), p_rmpv(ispin)%matrix)
          END DO
 
          ! release intermediate matrices
@@ -646,7 +647,7 @@ CONTAINS
                   IF (dft_control%restricted .AND. (ispin == 2)) THEN
                      CALL mo_set_restrict(mo_array)
                   ELSE
-                     CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+                     CALL get_mo_set(mo_set=mo_array(ispin), &
                                      mo_coeff=mo_coeff, &
                                      nmo=nmo, nao=nao, homo=homo)
 
@@ -672,13 +673,13 @@ CONTAINS
                      END IF
                   END IF
 
-                  CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, &
+                  CALL set_mo_occupation(mo_set=mo_array(ispin), &
                                          smear=qs_env%scf_control%smear)
 
-                  CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                        mo_array(ispin)%mo_set%mo_coeff_b) !fm->dbcsr
+                  CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                        mo_array(ispin)%mo_coeff_b) !fm->dbcsr
 
-                  CALL calculate_density_matrix(mo_array(ispin)%mo_set, &
+                  CALL calculate_density_matrix(mo_array(ispin), &
                                                 p_rmpv(ispin)%matrix)
                END IF
                ! adjust el_density in case surface_dipole_correction is switched
@@ -686,7 +687,7 @@ CONTAINS
                IF (scf_env%method == general_diag_method_nr) THEN
                   IF (dft_control%correct_surf_dip) THEN
                      IF (ABS(tot_corr_zeff) > 0.0_dp) THEN
-                        CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+                        CALL get_mo_set(mo_set=mo_array(ispin), &
                                         mo_coeff=mo_coeff, &
                                         nmo=nmo, nao=nao, homo=homo)
 
@@ -711,10 +712,10 @@ CONTAINS
                            CALL make_basis_sm(mo_coeff, nmo, s_sparse(1)%matrix)
                         END IF
 
-                        CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, smear=qs_env%scf_control%smear, &
+                        CALL set_mo_occupation(mo_set=mo_array(ispin), smear=qs_env%scf_control%smear, &
                                                tot_zeff_corr=tot_corr_zeff)
 
-                        CALL calculate_density_matrix(mo_array(ispin)%mo_set, &
+                        CALL calculate_density_matrix(mo_array(ispin), &
                                                       p_rmpv(ispin)%matrix)
                      END IF
                   END IF
@@ -732,7 +733,7 @@ CONTAINS
 !         DO ispin=1,nspin
 !           CALL integrate_ppl_rspace(qs%rho%rho_r(ispin),qs_env)
 !           CALL cp_cfm_solve(overlap,mos)
-!           CALL get_mo_set(mo_set=mo_array(ispin)%mo_set,&
+!           CALL get_mo_set(mo_set=mo_array(ispin),&
 !                           mo_coeff=mo_coeff, nmo=nmo, nao=nao)
 !           CALL cp_fm_init_random(mo_coeff,nmo)
 !         END DO
@@ -790,7 +791,7 @@ CONTAINS
          END DO
 
          DO ispin = 1, nspin
-            CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+            CALL get_mo_set(mo_set=mo_array(ispin), &
                             maxocc=maxocc, &
                             nelectron=nelectron)
             !
@@ -835,7 +836,7 @@ CONTAINS
             IF (dft_control%restricted .AND. (ispin == 2)) THEN
                CALL mo_set_restrict(mo_array)
             ELSE
-               CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+               CALL get_mo_set(mo_set=mo_array(ispin), &
                                mo_coeff=mo_coeff, &
                                nmo=nmo, nao=nao, homo=homo)
                CALL cp_fm_set_all(mo_coeff, 0.0_dp)
@@ -987,13 +988,13 @@ CONTAINS
                CALL make_basis_sm(mo_coeff, nmo, s_sparse(1)%matrix)
             END IF
 
-            CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, &
+            CALL set_mo_occupation(mo_set=mo_array(ispin), &
                                    smear=qs_env%scf_control%smear)
 
-            CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                  mo_array(ispin)%mo_set%mo_coeff_b) !fm->dbcsr
+            CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                  mo_array(ispin)%mo_coeff_b) !fm->dbcsr
 
-            CALL calculate_density_matrix(mo_array(ispin)%mo_set, &
+            CALL calculate_density_matrix(mo_array(ispin), &
                                           p_rmpv(ispin)%matrix)
             DO ikind = 1, SIZE(atomic_kind_set)
                IF (ASSOCIATED(pmat(ikind)%mat)) THEN
@@ -1022,7 +1023,7 @@ CONTAINS
                IF (dft_control%restricted .AND. (ispin == 2)) THEN
                   CALL mo_set_restrict(mo_array)
                ELSE
-                  CALL get_mo_set(mo_set=mo_array(ispin)%mo_set, &
+                  CALL get_mo_set(mo_set=mo_array(ispin), &
                                   mo_coeff=mo_coeff, &
                                   nmo=nmo, homo=homo)
                   CALL cp_fm_init_random(mo_coeff, nmo)
@@ -1044,12 +1045,12 @@ CONTAINS
                   END IF
                END IF
 
-               CALL set_mo_occupation(mo_set=mo_array(ispin)%mo_set, &
+               CALL set_mo_occupation(mo_set=mo_array(ispin), &
                                       smear=qs_env%scf_control%smear)
-               CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_set%mo_coeff, &
-                                     mo_array(ispin)%mo_set%mo_coeff_b)
+               CALL copy_fm_to_dbcsr(mo_array(ispin)%mo_coeff, &
+                                     mo_array(ispin)%mo_coeff_b)
 
-               CALL calculate_density_matrix(mo_array(ispin)%mo_set, &
+               CALL calculate_density_matrix(mo_array(ispin), &
                                              p_rmpv(ispin)%matrix)
             END IF
          END DO
@@ -1059,8 +1060,8 @@ CONTAINS
 ! switch_surf_dip [SGh]
       IF (dft_control%switch_surf_dip) THEN
          DO ispin = 1, nspin
-            CALL reassign_allocated_mos(mos_last_converged(ispin)%mo_set, &
-                                        mo_array(ispin)%mo_set)
+            CALL reassign_allocated_mos(mos_last_converged(ispin), &
+                                        mo_array(ispin))
          END DO
       END IF
 
@@ -1172,10 +1173,10 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_mopac_dm'
 
-      INTEGER                                            :: atom_a, group, handle, iatom, ikind, &
-                                                            iset, isgf, isgfa, ishell, ispin, la, &
-                                                            maxl, maxll, na, nao, natom, ncount, &
-                                                            nset, nsgf, z
+      INTEGER                                            :: atom_a, handle, iatom, ikind, iset, &
+                                                            isgf, isgfa, ishell, ispin, la, maxl, &
+                                                            maxll, na, nao, natom, ncount, nset, &
+                                                            nsgf, z
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: first_sgf
       INTEGER, DIMENSION(25)                             :: laox, naox
       INTEGER, DIMENSION(5)                              :: occupation
@@ -1190,6 +1191,7 @@ CONTAINS
       TYPE(dbcsr_type), POINTER                          :: matrix_p
       TYPE(gth_potential_type), POINTER                  :: gth_potential
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
+      TYPE(mp_comm_type)                                 :: group
       TYPE(sgp_potential_type), POINTER                  :: sgp_potential
       TYPE(xtb_atom_type), POINTER                       :: xtb_kind
 

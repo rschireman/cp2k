@@ -193,7 +193,11 @@ def process_file(fn: str, allow_modifications: bool) -> None:
         run_remote_tool("clangformat", fn)
 
     if re.match(r".*\.(cc|cpp|cxx|hcc|hpp|hxx)$", fn):
-        raise Exception(f"C++ is not supported.")
+        if fn.endswith("/torch_c_api.cpp"):
+            # Begrudgingly tolerated because PyTorch has no C API.
+            run_remote_tool("clangformat", fn)
+        else:
+            raise Exception(f"C++ is not supported.")
 
     if re.match(r"(.*/PACKAGE)|(.*\.py)$", fn):
         ast.parse(orig_content, filename=fn)
@@ -204,7 +208,7 @@ def process_file(fn: str, allow_modifications: bool) -> None:
         run_remote_tool("shellcheck", fn)
 
     if re.match(r".*\.md$", fn):
-        run_remote_tool("markdownlint", fn)
+        run_remote_tool("mdformat", fn)
 
     if re.match(r"(.*/CMakeLists.txt)|(.*\.cmake)$", fn):
         run_remote_tool("cmakeformat", fn)

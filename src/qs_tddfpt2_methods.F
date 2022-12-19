@@ -64,7 +64,7 @@ MODULE qs_tddfpt2_methods
                                               kernel_env_type,&
                                               release_kernel_env
    USE qs_mo_types,                     ONLY: get_mo_set,&
-                                              mo_set_p_type
+                                              mo_set_type
    USE qs_scf_methods,                  ONLY: eigensolver
    USE qs_scf_types,                    ONLY: qs_scf_env_type
    USE qs_tddfpt2_densities,            ONLY: tddfpt_construct_aux_fit_density,&
@@ -143,7 +143,7 @@ CONTAINS
                                                             old_state
       INTEGER, DIMENSION(maxspins)                       :: nactive
       LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
-                                                            is_restarted, state_change
+                                                            explicit, is_restarted, state_change
       REAL(kind=dp)                                      :: conv
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals, ostrength
       TYPE(admm_type), POINTER                           :: admm_env
@@ -157,10 +157,11 @@ CONTAINS
       TYPE(excited_energy_type), POINTER                 :: ex_env
       TYPE(full_kernel_env_type), TARGET                 :: full_kernel_env, kernel_env_admm_aux
       TYPE(kernel_env_type)                              :: kernel_env
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
-      TYPE(section_vals_type), POINTER                   :: lri_section, tddfpt_print_section, &
-                                                            tddfpt_section, xc_section
+      TYPE(section_vals_type), POINTER                   :: lri_section, namd_print_section, &
+                                                            tddfpt_print_section, tddfpt_section, &
+                                                            xc_section
       TYPE(stda_env_type), TARGET                        :: stda_kernel
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
@@ -332,6 +333,7 @@ CONTAINS
       DO istate = 1, nstates
          DO ispin = 1, nspins
             NULLIFY (evects(ispin, istate)%matrix, S_evects(ispin, istate)%matrix)
+            ALLOCATE (S_evects(ispin, istate)%matrix)
             CALL fm_pool_create_fm(work_matrices%fm_pool_ao_mo_occ(ispin)%pool, S_evects(ispin, istate)%matrix)
          END DO
       END DO
@@ -432,8 +434,6 @@ CONTAINS
          CALL cp_warn(__LOCATION__, "Skipping TDDFPT wavefunction optimization")
       END IF
 
-      CALL tddfpt_write_newtonx_output(evects, evals, gs_mos, logger, tddfpt_print_section, qs_env)
-
       IF (ASSOCIATED(matrix_ks_oep) .AND. tddfpt_control%dipole_form == tddfpt_dipole_velocity) THEN
          CALL cp_warn(__LOCATION__, &
                       "Transition dipole moments and oscillator strengths are likely to be incorrect "// &
@@ -443,6 +443,13 @@ CONTAINS
 
       ! *** print summary information ***
       log_unit = cp_logger_get_default_io_unit()
+
+      namd_print_section => section_vals_get_subs_vals(tddfpt_print_section, "NAMD_PRINT")
+      CALL section_vals_get(namd_print_section, explicit=explicit)
+      IF (explicit) THEN
+         CALL tddfpt_write_newtonx_output(evects, evals, gs_mos, logger, tddfpt_print_section, &
+                                          matrix_s(1)%matrix, S_evects, sub_env) !qs_env, sub_env)
+      END IF
       ALLOCATE (ostrength(nstates))
       ostrength = 0.0_dp
       CALL tddfpt_print_summary(log_unit, evects, evals, ostrength, mult, &
@@ -539,7 +546,9 @@ CONTAINS
          IF (do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
          IF (tddfpt_control%do_lrigpw) THEN
             CALL lri_env_release(kernel_env%full_kernel%lri_env)
+            DEALLOCATE (kernel_env%full_kernel%lri_env)
             CALL lri_density_release(kernel_env%full_kernel%lri_density)
+            DEALLOCATE (kernel_env%full_kernel%lri_density)
          END IF
          CALL release_kernel_env(kernel_env%full_kernel)
       ELSE IF (tddfpt_control%kernel == tddfpt_kernel_stda) THEN
@@ -850,7 +859,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_p_type), DIMENSION(:, :)                :: evects
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: fingerprint
       INTEGER, INTENT(INOUT)                             :: my_state
 
@@ -881,7 +890,7 @@ CONTAINS
       END DO
       ALLOCATE (psi0(nspins))
       DO ispin = 1, nspins
-         CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+         CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff)
          psi0(ispin)%matrix => mo_coeff
       END DO
       !

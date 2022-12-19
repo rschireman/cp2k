@@ -81,7 +81,8 @@ MODULE almo_scf
    USE kinds,                           ONLY: default_path_length,&
                                               dp
    USE mathlib,                         ONLY: binomial
-   USE message_passing,                 ONLY: mp_sum
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_sum
    USE molecule_types,                  ONLY: get_molecule_set_info,&
                                               molecule_type
    USE mscfg_types,                     ONLY: get_matrix_from_submatrices,&
@@ -93,12 +94,11 @@ MODULE almo_scf
    USE qs_initial_guess,                ONLY: calculate_mopac_dm
    USE qs_kind_types,                   ONLY: qs_kind_type
    USE qs_mo_types,                     ONLY: get_mo_set,&
-                                              mo_set_p_type
+                                              mo_set_type
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_scf_post_scf,                 ONLY: qs_scf_compute_properties
-   USE qs_scf_types,                    ONLY: qs_scf_env_type,&
-                                              scf_env_release
+   USE qs_scf_types,                    ONLY: qs_scf_env_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -1924,10 +1924,8 @@ CONTAINS
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:), &
          INTENT(IN)                                      :: matrix
 
-      INTEGER                                            :: iblock_col, iblock_col_size, iblock_row, &
-                                                            iblock_row_size, icol, irow, ispin, &
-                                                            Ncols, Nrows, nspins, para_group, &
-                                                            unit_nr
+      INTEGER :: iblock_col, iblock_col_size, iblock_row, iblock_row_size, icol, irow, ispin, &
+         Ncols, Nrows, nspins, para_group_handle, unit_nr
       LOGICAL                                            :: element_by_element
       REAL(KIND=dp)                                      :: energy, eps_local, eps_start, &
                                                             max_element, spin_factor
@@ -1936,6 +1934,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_iterator_type)                          :: iter
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_p_tmp, matrix_t_tmp
+      TYPE(mp_comm_type)                                 :: para_group
 
       ! define the output_unit
       logger => cp_get_default_logger()
@@ -2033,9 +2032,10 @@ CONTAINS
             CALL dbcsr_finalize(matrix_t_tmp(ispin))
             CALL dbcsr_filter(matrix_t_tmp(ispin), eps_local)
 
-            CALL dbcsr_get_info(matrix_t_tmp(ispin), group=para_group, &
+            CALL dbcsr_get_info(matrix_t_tmp(ispin), group=para_group_handle, &
                                 nfullrows_total=Nrows, &
                                 nfullcols_total=Ncols)
+            CALL para_group%set_handle(para_group_handle)
             CALL mp_sum(retained(ispin), para_group)
 
             !devide by the total no. elements
@@ -2114,7 +2114,7 @@ CONTAINS
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_t_processed
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
 
       CALL timeset(routineN, handle)
@@ -2177,7 +2177,7 @@ CONTAINS
       DO ispin = 1, almo_scf_env%nspins
          ! Currently only fm version of mo_set is usable.
          ! First transform the matrix_t to fm version
-         CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff)
+         CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff)
          CALL copy_dbcsr_to_fm(matrix_t_processed(ispin), mo_coeff)
          CALL dbcsr_release(matrix_t_processed(ispin))
       END DO
@@ -2189,13 +2189,6 @@ CONTAINS
       ! calculate post scf properties
       ! CALL almo_post_scf_compute_properties(qs_env, almo_scf_env)
       CALL almo_post_scf_compute_properties(qs_env)
-
-      ! In normal scf procedure this is done by scf,
-      ! but it's not called by ALMO
-      ! best to release it somewhere else
-      IF (ASSOCIATED(scf_env)) THEN
-         CALL scf_env_release(scf_env)
-      END IF
 
       ! compute the W matrix if associated
       IF (almo_scf_env%calc_forces) THEN

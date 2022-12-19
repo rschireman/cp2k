@@ -48,6 +48,7 @@ MODULE qs_dispersion_pairpot
    USE mathconstants,                   ONLY: twopi
    USE memory_utilities,                ONLY: reallocate
    USE message_passing,                 ONLY: mp_bcast,&
+                                              mp_comm_type,&
                                               mp_max,&
                                               mp_shift,&
                                               mp_sum
@@ -90,7 +91,8 @@ MODULE qs_dispersion_pairpot
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_dispersion_pairpot'
 
    PUBLIC :: qs_dispersion_pairpot_init, calculate_dispersion_pairpot, &
-             qs_scaling_init, qs_scaling_dftd3, qs_scaling_dftd3bj
+             qs_scaling_init, qs_scaling_dftd3, qs_scaling_dftd3bj, &
+             qs_dispersion_setcn
 
    TYPE dcnum_type
       INTEGER                                :: neighbors
@@ -132,7 +134,6 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: exlist
       LOGICAL                                            :: at_end, explicit, found, is_available
       REAL(KIND=dp)                                      :: dum
-      TYPE(cp_parser_type), POINTER                      :: parser
       TYPE(qs_atom_dispersion_type), POINTER             :: disp
 
       CALL timeset(routineN, handle)
@@ -241,24 +242,26 @@ CONTAINS
                   ! check on file
                   INQUIRE (FILE=filename, EXIST=is_available)
                   IF (is_available) THEN
-                     NULLIFY (parser)
-                     CALL parser_create(parser, filename, para_env=para_env)
-                     DO
-                        at_end = .FALSE.
-                        CALL parser_get_next_line(parser, 1, at_end)
-                        IF (at_end) EXIT
-                        CALL parser_get_object(parser, aname)
-                        IF (TRIM(aname) == TRIM(symbol)) THEN
-                           CALL parser_get_object(parser, disp%c6)
-                           ! we have to change the units J*nm^6*mol^-1 -> Hartree*Bohr^6
-                           disp%c6 = disp%c6*1000._dp*bohr**6/kjmol
-                           CALL parser_get_object(parser, disp%vdw_radii)
-                           disp%vdw_radii = disp%vdw_radii*bohr
-                           found = .TRUE.
-                           EXIT
-                        END IF
-                     END DO
-                     CALL parser_release(parser)
+                     BLOCK
+                        TYPE(cp_parser_type) :: parser
+                        CALL parser_create(parser, filename, para_env=para_env)
+                        DO
+                           at_end = .FALSE.
+                           CALL parser_get_next_line(parser, 1, at_end)
+                           IF (at_end) EXIT
+                           CALL parser_get_object(parser, aname)
+                           IF (TRIM(aname) == TRIM(symbol)) THEN
+                              CALL parser_get_object(parser, disp%c6)
+                              ! we have to change the units J*nm^6*mol^-1 -> Hartree*Bohr^6
+                              disp%c6 = disp%c6*1000._dp*bohr**6/kjmol
+                              CALL parser_get_object(parser, disp%vdw_radii)
+                              disp%vdw_radii = disp%vdw_radii*bohr
+                              found = .TRUE.
+                              EXIT
+                           END IF
+                        END DO
+                        CALL parser_release(parser)
+                     END BLOCK
                   END IF
                END IF
                IF (found) THEN
@@ -349,6 +352,60 @@ CONTAINS
    END SUBROUTINE qs_dispersion_pairpot_init
 
 ! **************************************************************************************************
+!> \brief ...
+!> \param atomic_kind_set ...
+!> \param qs_kind_set ...
+!> \param dispersion_env ...
+!> \param para_env ...
+! **************************************************************************************************
+   SUBROUTINE qs_dispersion_setcn(atomic_kind_set, qs_kind_set, dispersion_env, para_env)
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_dispersion_type), POINTER                  :: dispersion_env
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+
+      CHARACTER(LEN=default_string_length)               :: filename
+      INTEGER                                            :: i, ikind, max_elem, maxc, nkind
+      REAL(KIND=dp)                                      :: dum
+      TYPE(qs_atom_dispersion_type), POINTER             :: disp
+
+      nkind = SIZE(atomic_kind_set)
+      IF (dispersion_env%type /= xc_vdw_fun_pairpot) THEN
+         DO ikind = 1, nkind
+            ALLOCATE (disp)
+            disp%type = dftd3_pp
+            disp%defined = .TRUE.
+            CALL set_qs_kind(qs_kind_set(ikind), dispersion=disp)
+         END DO
+      END IF
+
+      max_elem = 94
+      maxc = 5
+      dispersion_env%max_elem = max_elem
+      dispersion_env%maxc = maxc
+      ALLOCATE (dispersion_env%maxci(max_elem))
+      ALLOCATE (dispersion_env%c6ab(max_elem, max_elem, maxc, maxc, 3))
+      ALLOCATE (dispersion_env%r0ab(max_elem, max_elem))
+      ALLOCATE (dispersion_env%rcov(max_elem))
+      ALLOCATE (dispersion_env%r2r4(max_elem))
+      ALLOCATE (dispersion_env%cn(max_elem))
+      ! get filename of parameter file
+      filename = dispersion_env%parameter_file_name
+      CALL dftd3_c6_param(dispersion_env%c6ab, dispersion_env%maxci, filename, para_env)
+      CALL setr0ab(dispersion_env%r0ab, dispersion_env%rcov, dispersion_env%r2r4)
+      ! the default coordination numbers
+      CALL setcn(dispersion_env%cn)
+      DO i = 1, max_elem
+         dum = 0.5_dp*dispersion_env%r2r4(i)*REAL(i, dp)**0.5_dp
+         dispersion_env%r2r4(i) = SQRT(dum)
+      END DO
+      dispersion_env%k1 = 16.0_dp
+      dispersion_env%k2 = 4._dp/3._dp
+      dispersion_env%k3 = -4._dp
+      dispersion_env%rcov = dispersion_env%k2*dispersion_env%rcov*bohr
+      dispersion_env%alp = 14._dp
+
+   END SUBROUTINE qs_dispersion_setcn
 
 ! **************************************************************************************************
 !> \brief ...
@@ -3301,11 +3358,11 @@ CONTAINS
       TYPE(dcnum_type), DIMENSION(:)                     :: dcnum
       TYPE(cp_para_env_type), POINTER                    :: para_env
 
-      INTEGER                                            :: group, i, ia, ipe, jn, n, natom, ntmax, &
-                                                            ntot
+      INTEGER                                            :: i, ia, ipe, jn, n, natom, ntmax, ntot
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: list, nloc
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: dvals
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: rik
+      TYPE(mp_comm_type)                                 :: group
 
 ! we only have to do something if this is a parallel run
 

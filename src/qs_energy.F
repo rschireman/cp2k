@@ -14,19 +14,24 @@
 MODULE qs_energy
    USE almo_scf,                        ONLY: almo_entry_scf
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_external_control,             ONLY: external_control
    USE dm_ls_scf,                       ONLY: ls_scf
    USE energy_corrections,              ONLY: energy_correction
    USE excited_states,                  ONLY: excited_state_energy
+   USE input_section_types,             ONLY: section_vals_get,&
+                                              section_vals_get_subs_vals,&
+                                              section_vals_type,&
+                                              section_vals_val_get
    USE lri_environment_methods,         ONLY: lri_print_stat
+   USE mp2,                             ONLY: mp2_main
    USE qs_energy_init,                  ONLY: qs_energies_init
    USE qs_energy_types,                 ONLY: qs_energy_type
-   USE qs_energy_utils,                 ONLY: qs_energies_compute_matrix_w,&
-                                              qs_energies_mp2,&
-                                              qs_energies_properties
+   USE qs_energy_utils,                 ONLY: qs_energies_properties
    USE qs_environment_methods,          ONLY: qs_env_rebuild_pw_env
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_ks_methods,                   ONLY: qs_ks_update_qs_env
+   USE qs_matrix_w,                     ONLY: qs_energies_compute_matrix_w
    USE qs_scf,                          ONLY: scf
 #include "./base/base_uses.f90"
 
@@ -62,10 +67,12 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_energies'
 
       INTEGER                                            :: handle
-      LOGICAL                                            :: do_consistent_energies, my_calc_forces, &
-                                                            run_rtp
+      LOGICAL                                            :: do_consistent_energies, &
+                                                            do_excited_state, loverlap_deltat, &
+                                                            my_calc_forces, run_rtp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(section_vals_type), POINTER                   :: excited_state_section
 
       CALL timeset(routineN, handle)
 
@@ -84,13 +91,25 @@ CONTAINS
          CALL qs_energies_init(qs_env, my_calc_forces)
          CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, energy=energy)
 
+         ! *** check if only overlap matrix is needed for couplings
+         loverlap_deltat = .FALSE.
+         NULLIFY (excited_state_section)
+         excited_state_section => section_vals_get_subs_vals(qs_env%input, "DFT%EXCITED_STATES")
+         CALL section_vals_get(excited_state_section, explicit=do_excited_state)
+         IF (do_excited_state) THEN
+            CALL section_vals_val_get(excited_state_section, "OVERLAP_DELTAT", &
+                                      l_val=loverlap_deltat)
+         END IF
+
          ! *** Perform a SCF run ***
-         IF (dft_control%qs_control%do_ls_scf) THEN
-            CALL ls_scf(qs_env=qs_env)
-         ELSE IF (dft_control%qs_control%do_almo_scf) THEN
-            CALL almo_entry_scf(qs_env=qs_env, calc_forces=my_calc_forces)
-         ELSE
-            CALL scf(qs_env=qs_env)
+         IF (.NOT. loverlap_deltat) THEN
+            IF (dft_control%qs_control%do_ls_scf) THEN
+               CALL ls_scf(qs_env=qs_env)
+            ELSE IF (dft_control%qs_control%do_almo_scf) THEN
+               CALL almo_entry_scf(qs_env=qs_env, calc_forces=my_calc_forces)
+            ELSE
+               CALL scf(qs_env=qs_env)
+            END IF
          END IF
 
          IF (do_consistent_energies) THEN
@@ -113,9 +132,11 @@ CONTAINS
             CALL energy_correction(qs_env, ec_init=.TRUE., calculate_forces=.FALSE.)
          END IF
 
-         CALL qs_energies_properties(qs_env, calc_forces)
+         IF (.NOT. loverlap_deltat) THEN
+            CALL qs_energies_properties(qs_env, calc_forces)
 
-         CALL excited_state_energy(qs_env, calculate_forces=.FALSE.)
+            CALL excited_state_energy(qs_env, calculate_forces=.FALSE.)
+         END IF
 
          IF (dft_control%qs_control%lrigpw) THEN
             CALL lri_print_stat(qs_env)
@@ -126,5 +147,29 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE qs_energies
+
+! **************************************************************************************************
+!> \brief Enters the mp2 part of cp2k
+!> \param qs_env ...
+!> \param calc_forces ...
+! **************************************************************************************************
+
+   SUBROUTINE qs_energies_mp2(qs_env, calc_forces)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, INTENT(IN)                                :: calc_forces
+
+      LOGICAL                                            :: should_stop
+
+      ! Compute MP2 energy
+
+      IF (ASSOCIATED(qs_env%mp2_env)) THEN
+
+         CALL external_control(should_stop, "MP2", target_time=qs_env%target_time, &
+                               start_time=qs_env%start_time)
+
+         CALL mp2_main(qs_env=qs_env, calc_forces=calc_forces)
+      END IF
+
+   END SUBROUTINE qs_energies_mp2
 
 END MODULE qs_energy

@@ -73,8 +73,7 @@ MODULE cp2k_runs
    USE geo_opt,                         ONLY: cp_geo_opt
    USE global_types,                    ONLY: global_environment_type,&
                                               globenv_create,&
-                                              globenv_release,&
-                                              globenv_retain
+                                              globenv_release
    USE grid_api,                        ONLY: grid_library_print_stats,&
                                               grid_library_set_config
    USE input_constants,                 ONLY: &
@@ -110,8 +109,8 @@ MODULE cp2k_runs
    USE mc_run,                          ONLY: do_mon_car
    USE md_run,                          ONLY: qs_mol_dyn
    USE message_passing,                 ONLY: &
-        mp_any_source, mp_bcast, mp_comm_dup, mp_comm_free, mp_comm_split, mp_environ, mp_max, &
-        mp_recv, mp_send, mp_sum, mp_sync
+        mp_any_source, mp_bcast, mp_comm_dup, mp_comm_free, mp_comm_split, mp_comm_type, &
+        mp_environ, mp_max, mp_recv, mp_send, mp_sum, mp_sync
    USE mscfg_methods,                   ONLY: do_mol_loop,&
                                               loop_over_molecules
    USE neb_methods,                     ONLY: neb
@@ -178,7 +177,8 @@ CONTAINS
    RECURSIVE SUBROUTINE cp2k_run(input_declaration, input_file_name, output_unit, mpi_comm, initial_variables)
       TYPE(section_type), POINTER                        :: input_declaration
       CHARACTER(LEN=*), INTENT(IN)                       :: input_file_name
-      INTEGER, INTENT(IN)                                :: output_unit, mpi_comm
+      INTEGER, INTENT(IN)                                :: output_unit
+      TYPE(mp_comm_type)                                 :: mpi_comm
       CHARACTER(len=default_path_length), &
          DIMENSION(:, :), INTENT(IN)                     :: initial_variables
 
@@ -201,13 +201,13 @@ CONTAINS
 
 #if defined(__DBCSR_ACC)
       IF (offload_get_device_count() > 0) THEN
-         CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit, &
+         CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit, &
                              accdrv_active_device_id=offload_get_chosen_device())
       ELSE
-         CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit)
+         CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit)
       END IF
 #else
-      CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit)
+      CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit)
 #endif
 
       CALL pw_gpu_init()
@@ -285,13 +285,13 @@ CONTAINS
          CALL farming_run(input_declaration, root_section, para_env, initial_variables)
 #if defined(__DBCSR_ACC)
          IF (offload_get_device_count() > 0) THEN
-            CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit, &
+            CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit, &
                                 accdrv_active_device_id=offload_get_chosen_device())
          ELSE
-            CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit)
+            CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit)
          END IF
 #else
-         CALL dbcsr_init_lib(mpi_comm, io_unit=output_unit)
+         CALL dbcsr_init_lib(mpi_comm%get_handle(), io_unit=output_unit)
 #endif
 
          CALL pw_gpu_init()
@@ -313,7 +313,6 @@ CONTAINS
          CALL f_env_add_defaults(new_env_id, f_env, handle=f_env_handle)
          force_env => f_env%force_env
          CALL force_env_get(force_env, globenv=globenv)
-         CALL globenv_retain(globenv)
       CASE (do_test)
          CALL lib_test(root_section, para_env, globenv)
       CASE (do_tree_mc) ! TMC entry point
@@ -437,15 +436,17 @@ CONTAINS
 
       IF (prog_name_id == do_cp2k) THEN
          f_env%force_env => force_env ! for mc
-         CALL globenv_retain(globenv) !mc
-         CALL globenv_release(force_env%globenv) !mc
+         IF (ASSOCIATED(force_env%globenv)) THEN
+         IF (.NOT. ASSOCIATED(force_env%globenv, globenv)) THEN
+            CALL globenv_release(force_env%globenv) !mc
+         END IF
+         END IF
          force_env%globenv => globenv !mc
          CALL f_env_rm_defaults(f_env, ierr=ierr, &
                                 handle=f_env_handle)
          CPASSERT(ierr == 0)
          CALL destroy_force_env(new_env_id, ierr=ierr)
          CPASSERT(ierr == 0)
-         CALL globenv_release(globenv)
       ELSE
          I_was_ionode = para_env%ionode
          CALL cp2k_finalize(root_section, para_env, globenv)
@@ -485,9 +486,9 @@ CONTAINS
       CHARACTER(LEN=default_path_length)       :: output_file
       CHARACTER(LEN=default_string_length)     :: str
       INTEGER :: dest, handle, i, i_job_to_restart, ierr, ijob, ijob_current, &
-                 ijob_end, ijob_start, iunit, n_jobs_to_run, new_group, new_output_unit, &
+                 ijob_end, ijob_start, iunit, n_jobs_to_run, new_output_unit, &
                  new_rank, new_size, ngroups, num_slaves, output_unit, primus_slave, &
-                 slave_group, slave_rank, source, tag, todo
+                 slave_rank, source, tag, todo
       INTEGER, DIMENSION(:), POINTER           :: group_distribution, &
                                                   master_slave_partition, &
                                                   slave_distribution, &
@@ -497,14 +498,15 @@ CONTAINS
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: waittime
       TYPE(cp_logger_type), POINTER            :: logger
       TYPE(cp_parser_type), POINTER            :: my_parser
-      TYPE(cp_unit_set_type), POINTER          :: default_units
+      TYPE(cp_unit_set_type)         :: default_units
       TYPE(farming_env_type), POINTER          :: farming_env
       TYPE(section_type), POINTER              :: g_section
       TYPE(section_vals_type), POINTER         :: g_data
+      TYPE(mp_comm_type) :: slave_group, new_group
 
       ! the primus of all slaves, talks to the master on topics concerning all slaves
       CALL timeset(routineN, handle)
-      NULLIFY (my_parser, g_section, g_data, default_units)
+      NULLIFY (my_parser, g_section, g_data)
 
       logger => cp_get_default_logger()
       output_unit = cp_print_key_unit_nr(logger, root_section, "FARMING%PROGRAM_RUN_INFO", &
@@ -831,6 +833,7 @@ CONTAINS
             IF (farming_env%Job(i)%output == "") THEN
                ! generate the output file
                WRITE (output_file, '(A12,I5.5)') "FARMING_OUT_", i
+               ALLOCATE (my_parser)
                CALL parser_create(my_parser, file_name=TRIM(farming_env%Job(i)%input))
                label = "&GLOBAL"
                CALL parser_search_string(my_parser, label, ignore_case=.TRUE., found=found)
@@ -850,6 +853,7 @@ CONTAINS
                   CALL section_release(g_section)
                END IF
                CALL parser_release(my_parser)
+               DEALLOCATE (my_parser)
             ELSE
                output_file = farming_env%Job(i)%output
             END IF
@@ -969,7 +973,7 @@ CONTAINS
       CHARACTER(len=*), INTENT(in)                       :: input_file_path, output_file_path
       CHARACTER(len=default_path_length), &
          DIMENSION(:, :), INTENT(IN)                     :: initial_variables
-      INTEGER, INTENT(in), OPTIONAL                      :: mpi_comm
+      TYPE(mp_comm_type), INTENT(in), OPTIONAL           :: mpi_comm
 
       INTEGER                                            :: unit_nr
       TYPE(cp_para_env_type), POINTER                    :: para_env

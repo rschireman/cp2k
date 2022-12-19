@@ -52,6 +52,7 @@ MODULE transport
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_allgather,&
+                                              mp_comm_type,&
                                               mp_environ
    USE particle_list_types,             ONLY: particle_list_type
    USE particle_methods,                ONLY: get_particle_set
@@ -70,7 +71,6 @@ MODULE transport
                                               REALDATA3D,&
                                               REALSPACE,&
                                               RECIPROCALSPACE,&
-                                              pw_p_type,&
                                               pw_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
@@ -301,9 +301,9 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'transport_initialize'
 
-      INTEGER                                            :: handle, mp_group, mynode, numnodes, &
-                                                            unit_nr
+      INTEGER                                            :: handle, mynode, numnodes, unit_nr
       TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(mp_comm_type)                                 :: mp_group
 
       CALL timeset(routineN, handle)
 
@@ -454,7 +454,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'convert_dbcsr_to_csr_interop'
 
-      INTEGER                                  :: handle, mepos, num_pe, mp_group
+      INTEGER                                  :: handle, mepos, num_pe
+      TYPE(mp_comm_type) :: mp_group
       INTEGER, ALLOCATABLE, DIMENSION(:)       :: nrows_local_all, first_row_all
       INTEGER(C_INT), DIMENSION(:), POINTER    :: colind_local, rowptr_local, nzerow_local
       REAL(C_DOUBLE), DIMENSION(:), POINTER    :: nzvals_local
@@ -663,9 +664,9 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(particle_list_type), POINTER                  :: particles
       TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_type)                                      :: gs, rs
+      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g, rho_r
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(qs_subsys_type), POINTER                      :: subsys
       TYPE(section_vals_type), POINTER                   :: dft_section

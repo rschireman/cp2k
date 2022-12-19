@@ -32,7 +32,6 @@ MODULE mp2_integrals
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_get_info,&
-                                              cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_to_string
@@ -68,6 +67,7 @@ MODULE mp2_integrals
                                               libint_potential_type
    USE machine,                         ONLY: m_flush
    USE message_passing,                 ONLY: mp_cart_create,&
+                                              mp_comm_type,&
                                               mp_environ,&
                                               mp_max,&
                                               mp_sendrecv,&
@@ -212,9 +212,9 @@ CONTAINS
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)       :: mo_coeff
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: mo_coeff
       TYPE(cp_fm_type), INTENT(OUT)                      :: fm_matrix_PQ
-      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: fm_matrix_L_RI_metric, &
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: fm_matrix_L_RI_metric, &
                                                             fm_matrix_Sinv_Vtrunc_Sinv
       INTEGER, INTENT(IN)                                :: nmo
       INTEGER, DIMENSION(:), INTENT(IN)                  :: homo
@@ -250,10 +250,10 @@ CONTAINS
 
       INTEGER :: cm, cut_memory, cut_memory_int, eri_method, gw_corr_lev_total, handle, handle2, &
          handle4, i, i_counter, i_mem, ibasis, ispin, itmp(2), j, jcell, kcell, LLL, min_bsize, &
-         mp_comm_t3c_2, my_B_all_end, my_B_all_size, my_B_all_start, my_B_occ_bse_end, &
-         my_B_occ_bse_size, my_B_occ_bse_start, my_B_virt_bse_end, my_B_virt_bse_size, &
-         my_B_virt_bse_start, my_group_L_end, my_group_L_size, my_group_L_start, n_rep, natom, &
-         ngroup, nimg, nkind, nspins, potential_type, ri_metric_type
+         my_B_all_end, my_B_all_size, my_B_all_start, my_B_occ_bse_end, my_B_occ_bse_size, &
+         my_B_occ_bse_start, my_B_virt_bse_end, my_B_virt_bse_size, my_B_virt_bse_start, &
+         my_group_L_end, my_group_L_size, my_group_L_start, n_rep, natom, ngroup, nimg, nkind, &
+         nspins, potential_type, ri_metric_type
       INTEGER(int_8)                                     :: nze
       INTEGER, ALLOCATABLE, DIMENSION(:) :: dist_AO_1, dist_AO_2, dist_RI, &
          ends_array_mc_block_int, ends_array_mc_int, my_B_size, my_B_virtual_end, &
@@ -280,6 +280,7 @@ CONTAINS
       TYPE(intermediate_matrix_type)                     :: intermed_mat_bse_ab, intermed_mat_bse_ij
       TYPE(intermediate_matrix_type), ALLOCATABLE, &
          DIMENSION(:)                                    :: intermed_mat, intermed_mat_gw
+      TYPE(mp_comm_type)                                 :: mp_comm_t3c_2
       TYPE(neighbor_list_3c_type)                        :: nl_3c
       TYPE(pw_env_type), POINTER                         :: pw_env_sub
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
@@ -594,7 +595,7 @@ CONTAINS
 
             DO i_counter = 1, my_group_L_size
 
-               CALL mp2_eri_3c_integrate_gpw(mo_coeff(1)%matrix, psi_L, rho_g, atomic_kind_set, qs_kind_set, cell, dft_control, &
+               CALL mp2_eri_3c_integrate_gpw(mo_coeff(1), psi_L, rho_g, atomic_kind_set, qs_kind_set, cell, dft_control, &
                                              particle_set, pw_env_sub, my_Lrows(:, i_counter), poisson_env, rho_r, pot_g, &
                                              ri_metric, mat_munu, qs_env, task_list_sub)
 
@@ -901,7 +902,8 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)         :: my_Lrows
       INTEGER, DIMENSION(:), INTENT(IN)                  :: sizes_B, sizes_L
       INTEGER, DIMENSION(2), INTENT(IN)                  :: blk_size
-      INTEGER, INTENT(IN)                                :: ngroup, igroup, mp_comm
+      INTEGER, INTENT(IN)                                :: ngroup, igroup
+      TYPE(mp_comm_type)                                 :: mp_comm
       TYPE(cp_para_env_type), INTENT(IN)                 :: para_env_sub
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'contract_B_L'

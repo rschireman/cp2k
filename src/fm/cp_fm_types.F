@@ -25,13 +25,13 @@ MODULE cp_fm_types
                                               cp_fm_struct_retain,&
                                               cp_fm_struct_type,&
                                               cp_fm_struct_write_info
-   USE cp_log_handling,                 ONLY: cp_to_string
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE kinds,                           ONLY: dp,&
                                               sp
    USE message_passing,                 ONLY: &
-        cp2k_is_parallel, mp_allgather, mp_any_source, mp_bcast, mp_irecv, mp_isend, mp_max, &
-        mp_proc_null, mp_recv, mp_request_null, mp_send, mp_sum, mp_waitall
+        cp2k_is_parallel, mp_allgather, mp_any_source, mp_bcast, mp_comm_type, mp_irecv, mp_isend, &
+        mp_max, mp_proc_null, mp_recv, mp_request_null, mp_request_type, mp_send, mp_sum, &
+        mp_waitall
    USE parallel_rng_types,              ONLY: UNIFORM,&
                                               rng_stream_type
 #include "../base/base_uses.f90"
@@ -44,7 +44,6 @@ MODULE cp_fm_types
    LOGICAL, PARAMETER          :: debug_this_module = .TRUE.
    INTEGER, PARAMETER :: src_tag = 3, dest_tag = 5, send_tag = 7, recv_tag = 11
 
-   INTEGER, SAVE :: last_fm_id_nr = 0
    INTEGER, PRIVATE :: mm_type = 1
 
    PUBLIC :: cp_fm_type, &
@@ -92,8 +91,6 @@ MODULE cp_fm_types
 ! **************************************************************************************************
 !> \brief represent a full matrix
 !> \param name the name of the matrix, used for printing
-!> \param id_nr identification number that makes this matrix unique
-!> \param ref_cont reference count (see doc/ReferenceCounting.html)
 !> \param matrix_struct structure of this matrix
 !> \param local_data array with the data of the matrix (its contents
 !>        depend on the matrix type used: in parallel runs it will be
@@ -106,7 +103,6 @@ MODULE cp_fm_types
    TYPE cp_fm_type
 !    PRIVATE
       CHARACTER(LEN=60) :: name = ""
-      INTEGER :: id_nr = -1
       LOGICAL :: use_sp = .FALSE.
       TYPE(cp_fm_struct_type), POINTER :: matrix_struct => NULL()
       REAL(KIND=dp), DIMENSION(:, :), POINTER, CONTIGUOUS :: local_data => NULL()
@@ -133,7 +129,8 @@ MODULE cp_fm_types
    TYPE copy_info_type
       INTEGER :: send_size
       INTEGER, DIMENSION(2) :: nlocal_recv, nblock_src, src_num_pe ! 1->row  2->col
-      INTEGER, DIMENSION(:), POINTER       :: send_request, recv_request, recv_disp
+      TYPE(mp_request_type), DIMENSION(:), POINTER :: send_request, recv_request
+      INTEGER, DIMENSION(:), POINTER       :: recv_disp
       INTEGER, DIMENSION(:), POINTER       :: recv_col_indices, recv_row_indices
       INTEGER, DIMENSION(:, :), POINTER    :: src_blacs2mpi
       REAL(KIND=dp), DIMENSION(:), POINTER :: recv_buf, send_buf
@@ -175,8 +172,6 @@ CONTAINS
       context => matrix_struct%context
       matrix%matrix_struct => matrix_struct
       CALL cp_fm_struct_retain(matrix%matrix_struct)
-      last_fm_id_nr = last_fm_id_nr + 1
-      matrix%id_nr = last_fm_id_nr
 
       matrix%use_sp = .FALSE.
       IF (PRESENT(use_sp)) matrix%use_sp = use_sp
@@ -207,7 +202,7 @@ CONTAINS
       IF (PRESENT(name)) THEN
          matrix%name = name
       ELSE
-         matrix%name = 'full matrix'//cp_to_string(matrix%id_nr)
+         matrix%name = 'full matrix'
       END IF
 
       CALL timestop(handle)
@@ -1377,8 +1372,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'cp_fm_start_copy_general'
 
-      INTEGER :: dest_p_i, dest_q_j, global_comm, global_rank, global_size, handle, i, j, k, &
-         mpi_rank, ncol_block_dest, ncol_block_src, ncol_local_recv, ncol_local_send, ncols, &
+      INTEGER :: dest_p_i, dest_q_j, global_rank, global_size, handle, i, j, k, mpi_rank, &
+         ncol_block_dest, ncol_block_src, ncol_local_recv, ncol_local_send, ncols, &
          nrow_block_dest, nrow_block_src, nrow_local_recv, nrow_local_send, nrows, p, q, &
          recv_rank, recv_size, send_rank, send_size
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: all_ranks, dest2global, dest_p, dest_q, &
@@ -1387,12 +1382,15 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: dest_blacs2mpi
       INTEGER, DIMENSION(2)                              :: dest_block, dest_block_tmp, dest_num_pe, &
                                                             src_block, src_block_tmp, src_num_pe
-      INTEGER, DIMENSION(6)                              :: recv_req, send_req
-      INTEGER, DIMENSION(:), POINTER :: recv_col_indices, recv_disp, recv_request, &
-         recv_row_indices, send_col_indices, send_request, send_row_indices
+      INTEGER, DIMENSION(:), POINTER                     :: recv_col_indices, recv_disp, &
+                                                            recv_row_indices, send_col_indices, &
+                                                            send_row_indices
       INTEGER, DIMENSION(:, :), POINTER                  :: src_blacs2mpi
       REAL(KIND=dp), DIMENSION(:), POINTER               :: recv_buf, send_buf
       TYPE(cp_fm_struct_type), POINTER                   :: recv_dist, send_dist
+      TYPE(mp_comm_type)                                 :: global_comm
+      TYPE(mp_request_type), DIMENSION(6)                :: recv_req, send_req
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: recv_request, send_request
 
       CALL timeset(routineN, handle)
 
@@ -1709,10 +1707,10 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: recv_count
       INTEGER, DIMENSION(2)                              :: nblock_src, nlocal_recv, src_num_pe
       INTEGER, DIMENSION(:), POINTER                     :: recv_col_indices, recv_disp, &
-                                                            recv_request, recv_row_indices, &
-                                                            send_request
+                                                            recv_row_indices
       INTEGER, DIMENSION(:, :), POINTER                  :: src_blacs2mpi
       REAL(KIND=dp), DIMENSION(:), POINTER               :: recv_buf, send_buf
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: recv_request, send_request
 
       CALL timeset(routineN, handle)
 
@@ -1782,9 +1780,9 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'cp_fm_cleanup_copy_general'
 
       INTEGER                                            :: handle
-      INTEGER, DIMENSION(:), POINTER                     :: send_request
       INTEGER, DIMENSION(:, :), POINTER                  :: src_blacs2mpi
       REAL(KIND=dp), DIMENSION(:), POINTER               :: send_buf
+      TYPE(mp_request_type), DIMENSION(:), POINTER       :: send_request
 
       CALL timeset(routineN, handle)
 
@@ -1847,8 +1845,8 @@ CONTAINS
       TYPE(cp_fm_type), INTENT(IN)             :: source, destination
       INTEGER, INTENT(IN)                      :: nrows, ncols, &
                                                   s_firstrow, s_firstcol, &
-                                                  d_firstrow, d_firstcol, &
-                                                  global_context
+                                                  d_firstrow, d_firstcol
+      TYPE(mp_comm_type), INTENT(IN) ::                                                  global_context
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'cp_fm_to_fm_submat_general'
 
@@ -1914,7 +1912,7 @@ CONTAINS
                        d_firstrow, &
                        d_firstcol, &
                        descb, &
-                       global_context)
+                       global_context%get_handle())
 #else
          MARK_USED(global_context)
          CPABORT("this subroutine only supports SCALAPACK")
@@ -1997,13 +1995,14 @@ CONTAINS
       TYPE(cp_para_env_type), POINTER          :: para_env
 #if defined(__SCALAPACK)
       INTEGER                                  :: i, i_block, icol_local, &
-                                                  ictxt_loc, in, info, ipcol, &
+                                                  in, info, ipcol, &
                                                   iprow, irow_local, &
                                                   mepos, mypcol, myprow, &
                                                   npcol, nprow, num_pe, rb, tag
       INTEGER, DIMENSION(9)                    :: desc
       REAL(KIND=dp), DIMENSION(:), POINTER     :: vecbuf
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: newdat
+      TYPE(mp_comm_type) :: ictxt_loc
       INTEGER, EXTERNAL                        :: numroc
 #endif
 
@@ -2029,7 +2028,7 @@ CONTAINS
       ! do the actual scalapack to cols reordering
       CALL pdgemr2d(nrow_global, ncol_global, fm%local_data, 1, 1, &
                     fm%matrix_struct%descriptor, &
-                    newdat, 1, 1, desc, ictxt_loc)
+                    newdat, 1, 1, desc, ictxt_loc%get_handle())
 
       ALLOCATE (vecbuf(nrow_global*max_block))
       vecbuf = HUGE(1.0_dp) ! init for valgrind
@@ -2102,7 +2101,7 @@ CONTAINS
       TYPE(cp_para_env_type), POINTER          :: para_env
 #if defined(__SCALAPACK)
       INTEGER                                  :: i_block, icol_local, &
-                                                  ictxt_loc, in, info, ipcol, &
+                                                  in, info, ipcol, &
                                                   iprow, irow_local, &
                                                   mepos, mypcol, myprow, &
                                                   npcol, nprow, num_pe, rb, tag, k, &
@@ -2110,6 +2109,7 @@ CONTAINS
       INTEGER, DIMENSION(9)                    :: desc
       REAL(KIND=dp), DIMENSION(:), POINTER     :: vecbuf
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: newdat
+      TYPE(mp_comm_type) :: ictxt_loc
       INTEGER, EXTERNAL                        :: numroc
 #endif
 
@@ -2147,7 +2147,7 @@ CONTAINS
       ! do the actual scalapack to cols reordering
       CALL pdgemr2d(nrow_global, ncol_global, fm%local_data, 1, 1, &
                     fm%matrix_struct%descriptor, &
-                    newdat, 1, 1, desc, ictxt_loc)
+                    newdat, 1, 1, desc, ictxt_loc%get_handle())
 
       ALLOCATE (vecbuf(nrow_global*max_block))
       vecbuf = HUGE(1.0_dp) ! init for valgrind

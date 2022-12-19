@@ -97,7 +97,6 @@ MODULE cp_log_handling
 !>      (0 note, 1 warning, 2 failure, 3 fatal)
 !>      it could be expanded with the ability to focus on one or more
 !>      module/object/thread/processor
-!> \param id_nr unique number to identify the logger
 !> \param ref_count reference count (see cp2k/doc/ReferenceCounting.html)
 !> \param print_level the level starting at which something gets printed
 !> \param default_local_unit_nr default unit for local logging (-1 if not
@@ -139,7 +138,7 @@ MODULE cp_log_handling
 !> \author Fawzi Mohamed
 ! **************************************************************************************************
    TYPE cp_logger_type
-      INTEGER :: id_nr, ref_count
+      INTEGER :: ref_count
       INTEGER :: print_level
       INTEGER :: default_local_unit_nr
       INTEGER :: default_global_unit_nr
@@ -162,8 +161,6 @@ MODULE cp_log_handling
    INTEGER, PRIVATE            :: stack_pointer = 0
    INTEGER, PARAMETER, PRIVATE :: max_stack_pointer = 10
    TYPE(default_logger_stack_type), SAVE, DIMENSION(max_stack_pointer) ::  default_logger_stack
-
-   INTEGER, SAVE, PRIVATE :: last_logger_id_nr = 0
 
 CONTAINS
 
@@ -308,8 +305,6 @@ CONTAINS
       NULLIFY (logger%para_env)
       NULLIFY (logger%iter_info)
       logger%ref_count = 1
-      last_logger_id_nr = last_logger_id_nr + 1
-      logger%id_nr = last_logger_id_nr
 
       IF (PRESENT(template_logger)) THEN
          IF (template_logger%ref_count < 1) &
@@ -626,7 +621,7 @@ CONTAINS
                CALL m_hostnm(host_name)
                PRINT *, " *** Error trying to WRITE to the local logger ***"
                PRINT *, " *** MPI_id           = ", lggr%para_env%mepos
-               PRINT *, " *** MPI_Communicator = ", lggr%para_env%group
+               PRINT *, " *** MPI_Communicator = ", lggr%para_env%group%get_handle()
                PRINT *, " *** PID              = ", pid
                PRINT *, " *** Hostname         = "//TRIM(host_name)
                CALL print_stack(default_output_unit)
@@ -645,7 +640,7 @@ CONTAINS
                            unit_number=lggr%default_local_unit_nr)
             WRITE (UNIT=lggr%default_local_unit_nr, FMT='(/,T2,A,I0,A,I0,A)', IOSTAT=iostat) &
                '*** Local logger file of MPI task ', lggr%para_env%mepos, &
-               ' in communicator ', lggr%para_env%group, ' ***'
+               ' in communicator ', lggr%para_env%group%get_handle(), ' ***'
             IF (iostat == 0) THEN
                CALL m_getpid(pid)
                CALL m_hostnm(host_name)
@@ -659,7 +654,7 @@ CONTAINS
                CALL m_hostnm(host_name)
                PRINT *, " *** Error trying to WRITE to the local logger ***"
                PRINT *, " *** MPI_id           = ", lggr%para_env%mepos
-               PRINT *, " *** MPI_Communicator = ", lggr%para_env%group
+               PRINT *, " *** MPI_Communicator = ", lggr%para_env%group%get_handle()
                PRINT *, " *** PID              = ", pid
                PRINT *, " *** Hostname         = "//TRIM(host_name)
                CALL print_stack(default_output_unit)

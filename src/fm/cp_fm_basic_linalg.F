@@ -28,7 +28,8 @@ MODULE cp_fm_basic_linalg
    USE machine,                         ONLY: m_memory
    USE mathlib,                         ONLY: get_pseudo_inverse_svd,&
                                               invert_matrix
-   USE message_passing,                 ONLY: mp_sum
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_sum
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
@@ -111,9 +112,8 @@ CONTAINS
 
       IF (PRESENT(beta)) THEN
          CPASSERT(PRESENT(matrix_b))
-         IF (matrix_a%id_nr == matrix_b%id_nr) THEN
-            IF (matrix_a%id_nr == matrix_b%id_nr) &
-               CPWARN("Bad use of routine. Call cp_fm_scale instead")
+         IF (ASSOCIATED(matrix_a%local_data, matrix_b%local_data)) THEN
+            CPWARN("Bad use of routine. Call cp_fm_scale instead")
             CALL cp_fm_scale(alpha + beta, matrix_a)
             CALL timestop(handle)
             RETURN
@@ -551,7 +551,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=dp), EXTERNAL                  :: DDOT
 #if defined(__SCALAPACK)
-      INTEGER                                  :: group
+      TYPE(mp_comm_type)                       :: group
 #endif
 
       CALL timeset(routineN, handle)
@@ -697,11 +697,12 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_trace_a0b0t0'
 
-      INTEGER                                            :: group, handle, mypcol, myprow, &
-                                                            ncol_local, npcol, nprow, nrow_local
+      INTEGER                                            :: handle, mypcol, myprow, ncol_local, &
+                                                            npcol, nprow, nrow_local
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: a, b
       REAL(KIND=sp), DIMENSION(:, :), POINTER            :: a_sp, b_sp
       TYPE(cp_blacs_env_type), POINTER                   :: context
+      TYPE(mp_comm_type)                                 :: group
 
       CALL timeset(routineN, handle)
 
@@ -768,11 +769,12 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_trace_a1b0t1'
 
-      INTEGER                                            :: group, handle, imatrix, n_matrices, &
+      INTEGER                                            :: handle, imatrix, n_matrices, &
                                                             ncols_local, nrows_local
       LOGICAL                                            :: use_sp_a, use_sp_b
       REAL(kind=dp), DIMENSION(:, :), POINTER            :: ldata_a, ldata_b
       REAL(kind=sp), DIMENSION(:, :), POINTER            :: ldata_a_sp, ldata_b_sp
+      TYPE(mp_comm_type)                                 :: group
 
       CALL timeset(routineN, handle)
 
@@ -841,11 +843,12 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_trace_a1b1t1'
 
-      INTEGER                                            :: group, handle, imatrix, n_matrices, &
+      INTEGER                                            :: handle, imatrix, n_matrices, &
                                                             ncols_local, nrows_local
       LOGICAL                                            :: use_accurate_sum, use_sp_a, use_sp_b
       REAL(kind=dp), DIMENSION(:, :), POINTER            :: ldata_a, ldata_b
       REAL(kind=sp), DIMENSION(:, :), POINTER            :: ldata_a_sp, ldata_b_sp
+      TYPE(mp_comm_type)                                 :: group
 
       CALL timeset(routineN, handle)
 
@@ -909,13 +912,14 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_contracted_trace_a2b2t2'
 
-      INTEGER                                            :: group, handle, ia, ib, iz, na, nb, &
-                                                            ncols_local, nrows_local, nz
+      INTEGER                                            :: handle, ia, ib, iz, na, nb, ncols_local, &
+                                                            nrows_local, nz
       INTEGER(kind=int_8)                                :: ib8, itrace, na8, ntraces
       LOGICAL                                            :: use_accurate_sum, use_sp_a, use_sp_b
       REAL(kind=dp)                                      :: t
       REAL(kind=dp), DIMENSION(:, :), POINTER            :: ldata_a, ldata_b
       REAL(kind=sp), DIMENSION(:, :), POINTER            :: ldata_a_sp, ldata_b_sp
+      TYPE(mp_comm_type)                                 :: group
 
       CALL timeset(routineN, handle)
 
@@ -1455,7 +1459,8 @@ CONTAINS
 
 #if defined(__SCALAPACK)
       TYPE(cp_fm_type)                :: u, vt, sigma, inv_sigma_ut
-      INTEGER                                  :: i, info, liwork, lwork, group, exponent_of_minus_one
+      TYPE(mp_comm_type) :: group
+      INTEGER                                  :: i, info, liwork, lwork, exponent_of_minus_one
       INTEGER, DIMENSION(9)                    :: desca
       LOGICAL                                  :: quenched
       REAL(KIND=dp)                            :: alpha, beta
@@ -2291,8 +2296,7 @@ CONTAINS
       INTEGER, INTENT(IN), OPTIONAL                      :: nrows, ncols, start_row, start_col
       LOGICAL, INTENT(IN), OPTIONAL                      :: do_norm, do_print
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_Gram_Schmidt_orthonorm', &
-         routineP = moduleN//':'//routineN
+      CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_Gram_Schmidt_orthonorm'
 
       INTEGER :: end_col_global, end_col_local, end_row_global, end_row_local, handle, i, j, &
          j_col, ncol_global, ncol_local, nrow_global, nrow_local, start_col_global, &

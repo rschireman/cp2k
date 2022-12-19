@@ -1,5 +1,10 @@
-# =================================================================================================
-# INCLUDE
+#!-------------------------------------------------------------------------------------------------!
+#!   CP2K: A general program to perform molecular dynamics simulations                             !
+#!   Copyright 2000-2022 CP2K developers group <https://cp2k.org>                                  !
+#!                                                                                                 !
+#!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
+#!-------------------------------------------------------------------------------------------------!
+
 include(fypp-sources)
 include(GNUInstallDirs) # required to get a proper LIBDIR variable
 include(CMakePackageConfigHelpers)
@@ -570,6 +575,7 @@ list(
   qs_loc_types.F
   qs_loc_utils.F
   qs_matrix_pools.F
+  qs_matrix_w.F
   qs_mixing_utils.F
   qs_mo_io.F
   qs_moments.F
@@ -1297,6 +1303,10 @@ list(APPEND OFFLOAD_SRCS_C offload/offload_buffer.c offload/offload_library.c)
 
 list(APPEND CP2K_SRCS_C pw/fpga/fft_fpga.c pw/fpga/opencl_utils.c)
 
+if(CP2K_USE_LIBTORCH)
+  list(APPEND CP2K_SRCS_CPP torch_c_api.cpp)
+endif()
+
 if(CP2K_USE_CUDA OR CP2K_USE_HIP)
   if(NOT CP2K_DISABLE_PW_GPU)
     list(APPEND PW_SRCS_GPU pw/gpu/pw_gpu_kernels.cu)
@@ -1360,43 +1370,44 @@ endif()
 add_library(cp2k_link_libs INTERFACE)
 target_link_libraries(
   cp2k_link_libs
-  INTERFACE $<$<BOOL:${CP2K_USE_PEXSI}>:PEXSI::pexsi>
-            $<$<BOOL:${CP2K_USE_SIRIUS}>:sirius::sirius>
-            $<$<BOOL:${CP2K_USE_VORI}>:CP2K_VORI::vori>
-            $<$<BOOL:${CP2K_USE_PEXSI}>:CP2K_PEXSI::pexsi>
-            $<$<BOOL:${CP2K_USE_PEXSI}>:CP2K_ptscotch::ptscotch>
-            $<$<BOOL:${CP2K_USE_SPGLIB}>:CP2K_LIBSPG::libspg>
-            $<$<BOOL:${CP2K_USE_LIBXC}>:CP2K_Libxc::xc
-            CP2K_Libxc::xcf90
-            CP2K_Libxc::xcf03>
-            $<$<BOOL:${CP2K_USE_ELPA}>:CP2K_ELPA::elpa>
-            $<$<BOOL:${CP2K_USE_FFTW3}>:CP2K_FFTW3::fftw3>
-            $<$<BOOL:${CP2K_USE_FFTW3}>:CP2K_FFTW3::fftw3_threads>
-            $<$<BOOL:${CP2K_USE_SPLA}>:SPLA::spla>
-            $<$<BOOL:${CP2K_USE_LIBINT2}>:CP2K_Libint2::int2>
-            $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma_prefixed_pxgemm>
-            $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma>
-            $<$<BOOL:${CP2K_USE_COSMA}>:costa::costa>
-            DBCSR::dbcsr
-            $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cufft>
-            $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cufftw>
-            $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cublas>
-            $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cudart>
-            $<$<BOOL:${CP2K_USE_HIP}>:hip::hipfft>
-            $<$<BOOL:${CP2K_USE_HIP}>:roc::hipblas>
-            $<$<BOOL:${CP2K_USE_HIP}>:hip::device>
-            CP2K_SCALAPACK::scalapack
-            $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmmf>
-            $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmmext>
-            $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmm>
-            CP2K_LAPACK::lapack
-            CP2K_BLAS::blas
-            MPI::MPI_Fortran
-            MPI::MPI_C
-            MPI::MPI_CXX
-            OpenMP::OpenMP_Fortran
-            OpenMP::OpenMP_C
-            OpenMP::OpenMP_CXX)
+  INTERFACE
+    $<$<BOOL:${CP2K_USE_PEXSI}>:PEXSI::pexsi>
+    $<$<BOOL:${CP2K_USE_SIRIUS}>:sirius::sirius>
+    $<$<BOOL:${CP2K_USE_VORI}>:CP2K_VORI::vori>
+    $<$<BOOL:${CP2K_USE_PEXSI}>:CP2K_PEXSI::pexsi>
+    $<$<BOOL:${CP2K_USE_PEXSI}>:CP2K_ptscotch::ptscotch>
+    $<$<BOOL:${CP2K_USE_SPGLIB}>:CP2K_LIBSPG::libspg>
+    $<$<BOOL:${CP2K_USE_LIBXC}>:CP2K_Libxc::xc>
+    $<$<BOOL:${CP2K_USE_ELPA}>:CP2K_ELPA::elpa>
+    $<$<BOOL:${CP2K_USE_FFTW3}>:CP2K_FFTW3::fftw3>
+    $<$<BOOL:${CP2K_ENABLE_FFTW3_THREADS_SUPPORT}>:CP2K_FFTW3::fftw3_threads>
+    $<$<BOOL:${CP2K_ENABLE_FFTW3_OPENMP_SUPPORT}>:CP2K_FFTW3::fftw3_omp>
+    $<$<BOOL:${CP2K_USE_SPLA}>:SPLA::spla>
+    $<$<BOOL:${CP2K_USE_LIBINT2}>:CP2K_Libint2::int2>
+    $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma_prefixed_pxgemm>
+    $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma>
+    $<$<BOOL:${CP2K_USE_COSMA}>:costa::costa>
+    DBCSR::dbcsr
+    $<$<BOOL:${CP2K_USE_TORCH}>:${TORCH_LIBRARIES}>
+    $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cufft>
+    $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cufftw>
+    $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cublas>
+    $<$<BOOL:${CP2K_USE_CUDA}>:CUDA::cudart>
+    $<$<BOOL:${CP2K_USE_HIP}>:hip::hipfft>
+    $<$<BOOL:${CP2K_USE_HIP}>:roc::hipblas>
+    $<$<BOOL:${CP2K_USE_HIP}>:hip::device>
+    CP2K_SCALAPACK::scalapack
+    $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmmf>
+    $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmmext>
+    $<$<BOOL:${CP2K_USE_LIBXSMM}>:CP2K_LibXSMM::libxsmm>
+    CP2K_LAPACK::lapack
+    CP2K_BLAS::blas
+    MPI::MPI_Fortran
+    MPI::MPI_C
+    MPI::MPI_CXX
+    OpenMP::OpenMP_Fortran
+    OpenMP::OpenMP_C
+    OpenMP::OpenMP_CXX)
 
 # mix the target and variables pointing to the include directories.
 
@@ -1411,13 +1422,17 @@ include_directories(
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/grid>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dbm>)
 
+if(DEFINED ENV{CPATH})
+  string(REPLACE ":" ";" INCLUDE_LIST $ENV{CPATH})
+  include_directories(${INCLUDE_LIST})
+endif()
+
 string(TIMESTAMP CP2K_TIMESTAMP "%Y-%m-%d %H:%M:%S")
 
 target_link_libraries(cp2k PUBLIC cp2k_link_libs)
 target_compile_definitions(
   cp2k
   PUBLIC __parallel
-         __MPI_VERSION=${MPI_Fortran_VERSION_MAJOR}
          __SCALAPACK
          __COMPILE_DATE=\"${CP2K_TIMESTAMP}\"
          __COMPILE_HOST=\"${CP2K_HOST_NAME}\"
@@ -1434,12 +1449,13 @@ target_compile_definitions(
          $<$<BOOL:${CP2K_USE_SIRIUS}>:__SIRIUS>
          $<$<BOOL:${CP2K_USE_SPLA}>:__SPLA>
          $<$<BOOL:${CP2K_USE_SpFFT}>:__SPFFT>
-         $<$<BOOL:${CP2K_USE_GEMM_OFFLOADING}>:__OFFLOAD_GEMM>
+         $<$<BOOL:${CP2K_USE_SPLA_GEMM_OFFLOADING}>:__OFFLOAD_GEMM>
          $<$<BOOL:${CP2K_USE_ELPA}>:__ELPA>
          $<$<BOOL:${CP2K_USE_LIBXC}>:__LIBXC>
          $<$<BOOL:${CP2K_USE_FFTW3}>:__FFTW3>
          $<$<BOOL:${CP2K_USE_LIBINT2}>:__LIBINT>
          $<$<BOOL:${CP2K_USE_PEXSI}>:__LIBPEXSI>
+         $<$<BOOL:${CP2K_USE_LIBTORCH}>:__LIBTORCH>
          $<$<BOOL:${CP2K_USE_COSMA}>:__COSMA>
          $<$<BOOL:${CP2K_USE_LIBXSMM}>:__LIBXSMM>
          $<$<STREQUAL:${CP2K_BLAS_VENDOR},MKL>:__MKL>

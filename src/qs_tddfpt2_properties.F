@@ -67,8 +67,10 @@ MODULE qs_tddfpt2_properties
    USE mathconstants,                   ONLY: twopi,&
                                               z_one,&
                                               z_zero
-   USE message_passing,                 ONLY: mp_irecv,&
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_irecv,&
                                               mp_isend,&
+                                              mp_request_type,&
                                               mp_sum,&
                                               mp_wait
    USE molden_utils,                    ONLY: write_mos_molden
@@ -98,7 +100,7 @@ MODULE qs_tddfpt2_properties
                                               deallocate_mo_set,&
                                               get_mo_set,&
                                               init_mo_set,&
-                                              mo_set_p_type,&
+                                              mo_set_type,&
                                               set_mo_set
    USE qs_moments,                      ONLY: build_berry_moment_matrix
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
@@ -678,15 +680,16 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_excitation_analysis'
 
       CHARACTER(len=5)                                   :: spin_label
-      INTEGER :: handle, icol, iproc, irow, ispin, istate, nao, ncols_local, nrows_local, nspins, &
-         nstates, send_handler, send_handler2, state_spin
+      INTEGER                                            :: handle, icol, iproc, irow, ispin, &
+                                                            istate, nao, ncols_local, nrows_local, &
+                                                            nspins, nstates, state_spin
       INTEGER(kind=int_8)                                :: iexc, imo_occ, imo_virt, ind, nexcs, &
                                                             nexcs_local, nexcs_max_local, &
                                                             nmo_virt_occ, nmo_virt_occ_alpha
       INTEGER(kind=int_8), ALLOCATABLE, DIMENSION(:)     :: inds_local, inds_recv, nexcs_recv
       INTEGER(kind=int_8), DIMENSION(1)                  :: nexcs_send
       INTEGER(kind=int_8), DIMENSION(maxspins)           :: nmo_occ8, nmo_virt8
-      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds, recv_handlers, recv_handlers2
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
       INTEGER, DIMENSION(:), POINTER                     :: col_indices, row_indices
       INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt
       LOGICAL                                            :: do_exc_analysis
@@ -698,6 +701,8 @@ CONTAINS
       TYPE(cp_fm_p_type), ALLOCATABLE, DIMENSION(:)      :: S_mos_virt, weights_fm
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(mp_request_type)                              :: send_handler, send_handler2
+      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:)   :: recv_handlers, recv_handlers2
 
       CALL timeset(routineN, handle)
 
@@ -959,7 +964,7 @@ CONTAINS
       TYPE(cp_fm_type)                                   :: Sev, smat, tmat, wmat, work, wvec
       TYPE(cp_fm_type), POINTER                          :: ev
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: nto_set
+      TYPE(mo_set_type), ALLOCATABLE, DIMENSION(:)       :: nto_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(section_vals_type), POINTER                   :: molden_section, nto_section
@@ -1004,14 +1009,13 @@ CONTAINS
             nto_name(2) = 'Particle_states'
             ALLOCATE (nto_set(2))
             DO i = 1, 2
-               NULLIFY (nto_set(i)%mo_set)
-               CALL allocate_mo_set(nto_set(i)%mo_set, nao, ntomax, 0, 0.0_dp, 1.0_dp, 0.0_dp)
+               CALL allocate_mo_set(nto_set(i), nao, ntomax, 0, 0.0_dp, 1.0_dp, 0.0_dp)
                ev => evects(1, istate)%matrix
                CALL cp_fm_get_info(ev, matrix_struct=fm_struct)
                CALL cp_fm_struct_create(fmstruct=fm_mo_struct, template_fmstruct=fm_struct, &
                                         ncol_global=ntomax)
                CALL cp_fm_create(tmat, fm_mo_struct)
-               CALL init_mo_set(nto_set(i)%mo_set, fm_ref=tmat, name=nto_name(i))
+               CALL init_mo_set(nto_set(i), fm_ref=tmat, name=nto_name(i))
                CALL cp_fm_release(tmat)
                CALL cp_fm_struct_release(fm_mo_struct)
             END DO
@@ -1054,7 +1058,7 @@ CONTAINS
                IF (sume > threshold) EXIT
             END DO
             ! store hole states
-            CALL set_mo_set(nto_set(1)%mo_set, nmo=nnto)
+            CALL set_mo_set(nto_set(1), nmo=nnto)
             DO i = 1, nnto
                ia = ia_index(1, i)
                ispin = ia_index(2, i)
@@ -1072,13 +1076,13 @@ CONTAINS
                CALL cp_fm_to_fm(teig(ispin)%matrix, tmat, 1, ia, 1)
                CALL parallel_gemm('N', 'N', nao, 1, nmo, 1.0_dp, gs_mos(ispin)%mos_occ, &
                                   tmat, 0.0_dp, wvec)
-               CALL cp_fm_to_fm(wvec, nto_set(1)%mo_set%mo_coeff, 1, 1, i)
+               CALL cp_fm_to_fm(wvec, nto_set(1)%mo_coeff, 1, 1, i)
                CALL cp_fm_release(wvec)
                CALL cp_fm_release(tmat)
             END DO
             ! particle states
             ! Solve generalized eigenvalue equation:  (S*X)*(S*X)(T)*v = lambda*S*v
-            CALL set_mo_set(nto_set(2)%mo_set, nmo=nnto)
+            CALL set_mo_set(nto_set(2), nmo=nnto)
             DO ispin = 1, nspins
                ev => evects(ispin, istate)%matrix
                CALL cp_fm_get_info(ev, matrix_struct=fm_struct, nrow_global=nao, ncol_global=nmo)
@@ -1109,7 +1113,7 @@ CONTAINS
                         CALL cp_warn(__LOCATION__, &
                                      "Could not locate particle state associated with hole state.")
                      ELSE
-                        CALL cp_fm_to_fm(wmat, nto_set(2)%mo_set%mo_coeff, 1, icg, i)
+                        CALL cp_fm_to_fm(wmat, nto_set(2)%mo_coeff, 1, icg, i)
                      END IF
                   END IF
                END DO
@@ -1150,7 +1154,7 @@ CONTAINS
             DEALLOCATE (teig)
             !
             DO i = 1, 2
-               CALL deallocate_mo_set(nto_set(i)%mo_set)
+               CALL deallocate_mo_set(nto_set(i))
             END DO
             DEALLOCATE (nto_set)
          END DO
@@ -1228,16 +1232,18 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'vec_product'
 
-      INTEGER                                            :: blk, group, handle, icol, irow
+      INTEGER                                            :: blk, group_handle, handle, icol, irow
       LOGICAL                                            :: found
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: vba, vbb
       TYPE(dbcsr_iterator_type)                          :: iter
+      TYPE(mp_comm_type)                                 :: group
 
       CALL timeset(routineN, handle)
 
       res = 0.0_dp
 
-      CALL dbcsr_get_info(va, group=group)
+      CALL dbcsr_get_info(va, group=group_handle)
+      CALL group%set_handle(group_handle)
       CALL dbcsr_iterator_start(iter, va)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
          CALL dbcsr_iterator_next_block(iter, irow, icol, vba, blk)
@@ -1264,7 +1270,7 @@ CONTAINS
    SUBROUTINE print_nto_cubes(qs_env, mos, istate, stride, append_cube, print_section)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(mo_set_type), DIMENSION(:), INTENT(IN)        :: mos
       INTEGER, INTENT(IN)                                :: istate
       INTEGER, DIMENSION(:), POINTER                     :: stride
       LOGICAL, INTENT(IN)                                :: append_cube
@@ -1313,7 +1319,7 @@ CONTAINS
                       particle_set=particle_set)
 
       DO iset = 1, 2
-         CALL get_mo_set(mo_set=mos(iset)%mo_set, mo_coeff=mo_coeff, nmo=nmo)
+         CALL get_mo_set(mo_set=mos(iset), mo_coeff=mo_coeff, nmo=nmo)
          DO i = 1, nmo
             CALL calculate_wavefunction(mo_coeff, i, wf_r, wf_g, atomic_kind_set, qs_kind_set, &
                                         cell, dft_control, particle_set, pw_env)

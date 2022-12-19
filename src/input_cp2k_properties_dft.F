@@ -294,9 +294,6 @@ CONTAINS
 
       TYPE(section_type), POINTER                        :: section
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'create_dcdr_section', &
-         routineP = moduleN//':'//routineN
-
       LOGICAL                                            :: failure
       TYPE(keyword_type), POINTER                        :: keyword
       TYPE(section_type), POINTER                        :: print_key, subsection
@@ -1600,6 +1597,16 @@ CONTAINS
                                        print_level=debug_print_level + 1, filename="CP2K_NEWTONX")
       CALL keyword_create(keyword, __LOCATION__, name="PRINT_VIRTUALS", &
                           description="Print occupied AND virtual molecular orbital coefficients", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="PRINT_PHASES", &
+                          description="Print phases of occupied and virtuals MOs.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_WITH_PHASES", &
+                          description="Scale ES eigenvectors with phases of occupied and virtuals MOs.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)

@@ -35,7 +35,7 @@ MODULE cp_fm_elpa
                     dp
    USE message_passing, ONLY: mp_comm_free, &
                               mp_comm_split_direct, &
-                              mp_bcast
+                              mp_bcast, mp_comm_type
    USE OMP_LIB, ONLY: omp_get_max_threads
 
 #include "../base/base_uses.f90"
@@ -153,7 +153,9 @@ MODULE cp_fm_elpa
    CHARACTER(len=44), DIMENSION(1), PARAMETER :: elpa_kernel_descriptions = ["Automatically selected kernel"]
 #endif
 
+#if defined(__ELPA)
    INTEGER, SAVE :: elpa_kernel = elpa_kernel_ids(1) ! auto
+#endif
    LOGICAL, SAVE :: elpa_qr = .FALSE., &
                     elpa_qr_unsafe = .FALSE., &
                     elpa_should_print = .FALSE.
@@ -278,9 +280,9 @@ CONTAINS
       TYPE(cp_fm_type), INTENT(IN)          :: matrix, eigenvectors
       REAL(KIND=dp), DIMENSION(:), INTENT(OUT) :: eigenvalues
 
+#if defined(__ELPA)
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_diag_elpa'
 
-#if defined(__ELPA)
       INTEGER                                  :: handle
       TYPE(cp_fm_type)                         :: eigenvectors_new, matrix_new
       TYPE(cp_fm_redistribute_info)            :: rdinfo
@@ -332,7 +334,8 @@ CONTAINS
 
       CLASS(elpa_t), POINTER                   :: elpa_obj
       CHARACTER(len=default_string_length)     :: kernel_name
-      INTEGER                                  :: group, i, &
+      TYPE(mp_comm_type) :: group
+      INTEGER                                  :: i, &
                                                   mypcol, myprow, n, &
                                                   n_rows, n_cols, &
                                                   nblk, neig, io_unit, &
@@ -487,7 +490,7 @@ CONTAINS
       CALL elpa_obj%set("nblk", nblk, success)
       CPASSERT(success == elpa_ok)
 
-      CALL elpa_obj%set("mpi_comm_parent", group, success)
+      CALL elpa_obj%set("mpi_comm_parent", group%get_handle(), success)
       CPASSERT(success == elpa_ok)
 
       CALL elpa_obj%set("process_row", myprow, success)

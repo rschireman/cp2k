@@ -14,7 +14,7 @@
 MODULE mp2_types
    USE cp_eri_mme_interface,            ONLY: cp_eri_mme_finalize,&
                                               cp_eri_mme_param
-   USE cp_fm_types,                     ONLY: cp_fm_p_type
+   USE cp_fm_types,                     ONLY: cp_fm_type
    USE dbcsr_api,                       ONLY: dbcsr_p_type,&
                                               dbcsr_type
    USE hfx_types,                       ONLY: hfx_release,&
@@ -38,6 +38,7 @@ MODULE mp2_types
                                               local_gemm_create,&
                                               local_gemm_destroy,&
                                               local_gemm_set_op_threshold_gpu
+   USE message_passing,                 ONLY: mp_request_type
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_p_env_types,                  ONLY: qs_p_env_type
 #include "./base/base_uses.f90"
@@ -225,7 +226,7 @@ MODULE mp2_types
       REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE :: operator_half, PQ_half, Gamma_PQ, Gamma_PQ_2
       TYPE(dbcsr_p_type), DIMENSION(:, :), ALLOCATABLE :: G_P_ia
       TYPE(dbcsr_p_type), DIMENSION(:), ALLOCATABLE :: mo_coeff_o, mo_coeff_v
-      TYPE(cp_fm_p_type), ALLOCATABLE, DIMENSION(:) :: P_mo, W_mo, L_jb
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: P_mo, W_mo, L_jb
       REAL(KIND=dp) :: cphf_eps_conv, scale_step_size
       INTEGER :: cphf_max_num_iter, z_solver_method, cphf_restart
       LOGICAL :: enforce_decrease, recalc_residual, polak_ribiere
@@ -235,6 +236,8 @@ MODULE mp2_types
       REAL(dp)                 :: eps_canonical
       LOGICAL                  :: free_hfx_buffer
       LOGICAL                  :: use_old_grad
+      INTEGER :: dot_blksize
+      INTEGER :: max_parallel_comm
    END TYPE
 
    TYPE mp2_type
@@ -276,13 +279,13 @@ MODULE mp2_types
       INTEGER, DIMENSION(:), ALLOCATABLE  :: sizes
       INTEGER, DIMENSION(:, :), ALLOCATABLE  :: indx
       INTEGER :: proc
-      INTEGER :: msg_req
+      TYPE(mp_request_type) :: msg_req
    END TYPE
 
    TYPE integ_mat_buffer_type_2D
       REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE  :: msg
       INTEGER :: proc
-      INTEGER :: msg_req
+      TYPE(mp_request_type) :: msg_req
    END TYPE
 
    TYPE pair_list_type_mp2
